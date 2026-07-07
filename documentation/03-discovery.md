@@ -1,103 +1,81 @@
-# 03 — Discovery
+# 03 — Discovery & Auth
 
-Discovery answers: **what pages does this application have?** Its output is the Route Manifest.
-Everything downstream — caching, execution, reporting coverage — is only as good as this list, so
-discovery uses three tiers and merges them, rather than betting on one technique.
+Discovery answers: **what pages does this application have?** Its output is the Page Set — a
+deduplicated, bounded list of concrete URLs to visit. Everything downstream is only as good as
+this list.
 
-## Output: the Route Manifest
+A deliberate simplification versus framework-integrated tools: vigil discovers **from the
+outside only**. No source-code adapters, no AST parsing, no per-framework plugins. This is what
+makes vigil work identically for Next.js, Rails, Django, WordPress, or a hand-rolled SPA — and
+it removes an entire category of code to build and maintain. The trade-off (routes that are
+unlinked *and* unlisted stay invisible) is covered honestly below.
+
+## The three sources, merged
+
+### Source 1 — Config routes (authoritative)
+Users can list routes explicitly — the only way to guarantee coverage of critical pages:
 
 ```ts
-interface RouteManifest {
-  routes: DiscoveredRoute[];
-  sources: ("code" | "sitemap" | "crawl" | "manual")[];
-  generatedAt: string;
-}
-
-interface DiscoveredRoute {
-  pattern: string;          // "/products/:id"  — normalized, the cache key's first half
-  samples: string[];        // ["/products/42", "/products/7"] — concrete URLs to visit
-  source: "code" | "sitemap" | "crawl" | "manual";
-  requiresAuth: boolean;    // learned (redirect-to-login probe) or configured
-  priority: number;         // 0 = critical … 3 = low; drives scheduling under budgets
+discovery: {
+  routes: ["/", "/pricing", "/checkout", "/products/42", "/products/7"],
 }
 ```
 
-Key idea: vigil tests **routes**, not URLs. `/products/1 … /products/9999` is one route with a
-couple of sampled instances. This is what keeps a 50,000-URL store testable in one minute.
+Config routes are always visited, first, regardless of caps.
 
-## Tier 1 — Code route extraction (best: complete and free)
+### Source 2 — Sitemap (cheap, usually present)
+Fetch `{origin}/sitemap.xml` and any `Sitemap:` lines in `robots.txt`; follow sitemap indexes
+one level deep. Parsing via `fast-xml-parser` (MIT, tiny). Every `<loc>` that is same-origin
+joins the candidate list.
 
-If vigil runs inside the repo (the normal case for a library in the deploy pipeline), it can read
-the routing source of truth directly. Framework adapters, each a small pure function
-`(projectDir) => DiscoveredRoute[]`:
-
-| Framework | Extraction strategy |
-|---|---|
-| Next.js (app router) | walk `app/**/page.{tsx,jsx}`; folder segments → pattern; `[id]` → `:id`; `[...slug]` → wildcard |
-| Next.js (pages router) | walk `pages/**`, same mapping |
-| React Router | parse `createBrowserRouter` / `<Route path>` via a light TS AST pass |
-| Vue Router / Nuxt | routes array / `pages/` directory convention |
-| Angular | `Routes` arrays in `*-routing.module.ts` |
-| SvelteKit | `src/routes/**/+page.svelte` |
-| Express/Fastify (SSR) | registered GET routes rendering HTML |
-
-Adapters are a public extension point (see 08) so the community can add frameworks. Detection is
-automatic: look at `package.json` dependencies, run every adapter that matches, merge.
-
-Dynamic segments need concrete samples to visit. Sources, in order: examples given in config
-(`sampleParams`), IDs harvested from links found during crawling (tier 3 feeds back into tier 1's
-routes), and sitemap URLs that match the pattern.
-
-## Tier 2 — Sitemap & well-known sources (cheap, often present)
-
-Fetch and parse `sitemap.xml` (following index sitemaps), `robots.txt` `Sitemap:` lines. Every URL
-is normalized (strip tracking params, sort query keys) and **clustered into patterns**: URLs whose
-paths differ only in segments that look like IDs (numeric, uuid, slug-with-hash) collapse into one
-route with those URLs as samples. Clustering algorithm: split path into segments; a segment column
-across many URLs with high cardinality and consistent shape → parameter.
-
-## Tier 3 — Bounded crawl (fallback and gap-filler, always runs shallowly)
-
+### Source 3 — Bounded crawl (fallback and gap-filler)
 A Playwright-driven BFS from the start URL:
 
-1. Visit page (network-idle bounded at 10s), collect `a[href]` same-origin links **and**
-   client-side navigations (intercept `history.pushState`) — this is what makes SPA discovery work.
-2. Normalize + cluster into patterns exactly as tier 2.
-3. Depth limit (default 3), page limit (default 200 visited during discovery), politeness delay
-   configurable.
+1. Visit page (bounded wait), collect `a[href]` same-origin links **and** client-side
+   navigations (intercept `history.pushState`/`replaceState`) — this makes SPA discovery work.
+2. Depth limit (default 2), page limit during discovery (default 100), politeness delay
+   configurable. The crawl is **read-only**: it never clicks, submits, or executes interactions
+   — it only reads hrefs from rendered HTML.
 
-The crawl runs even when tiers 1–2 succeeded, at shallow depth, for two reasons: it validates that
-statically-known routes are actually *linked and reachable* (an orphaned page is itself a finding),
-and it discovers routes that exist only behind runtime conditions (feature flags, role-based nav).
+The crawl always runs (even when a sitemap exists) at shallow depth, because it finds what the
+sitemap forgot and validates that listed pages are actually *linked*.
 
-### Special-case: pages that require interaction to reach
-Some "pages" are modals/steps not addressable by URL (e.g. step 2 of a wizard). Discovery does not
-chase these — they belong to the *spec* of their parent route: when the Explorer investigates
-`/checkout`, its generated spec walks the reachable steps. Discovery finds URLs; exploration finds
-depth within a URL.
+## Normalization & sampling
 
-## Merging and the vanished-route rule
+All candidates pass through one pipeline:
 
-`pattern` is the merge key; code-derived entries win on metadata conflicts (they know `requiresAuth`
-and params best). Routes present in the Asset Store's index but absent from this run's manifest are
-marked **vanished**: reported (a disappeared page is exactly the kind of thing a sanity check must
-say out loud), asset kept for 10 runs (grace period for flaky discovery), then archived.
+1. **Same-origin filter** (subdomains excluded unless `allowSubdomains: true`).
+2. **Normalize:** strip fragments, strip tracking params (`utm_*`, `fbclid`, …), sort query keys.
+3. **Include/exclude globs** from config (e.g. exclude `/admin/**`, `/api/**`, `/logout`).
+4. **Parametric collapsing:** URLs whose paths differ only in one high-cardinality segment
+   (numeric, UUID, long slug) are grouped; each group contributes `samplesPerPattern` URLs
+   (default 2) instead of thousands. `/products/1 … /products/9999` → 2 samples. This is a
+   simple segment-shape heuristic, not a framework guess — misgrouping costs at most a few
+   extra or fewer visits, never correctness.
+5. **Priority & cap:** config routes → shallow crawl depth → sitemap order, capped at `maxPages`.
+   Pages beyond the cap are reported `skipped`.
+
+### Honest limitation
+A page that is behind a runtime condition (feature flag, role), unlinked, and absent from the
+sitemap will not be discovered. The fix is one line in `discovery.routes`. vigil's report lists
+the source of every page it visited, so coverage is inspectable, and the crawl+sitemap union in
+practice covers the overwhelming majority of real apps.
 
 ## Authentication
 
-Most real apps hide everything interesting behind login, so auth is first-class, not an afterthought.
+Most real apps hide everything interesting behind login, so auth is first-class.
 
-### The mechanism: storage state, established once
-Playwright can serialize cookies + localStorage (`storageState`). vigil logs in **once per run at
-most** (and reuses a previous state if it still works), saves the state to
-`.vigil/auth/storageState.json` (gitignored), and starts every browser context from it.
+### The mechanism: storage state, established once per run
+Playwright serializes cookies + localStorage (`storageState`). vigil logs in **at most once per
+run**, keeps the state in memory (optionally persisted to `.vigil-auth.json`, gitignored, `0600`
+perms, for reuse across runs), and starts every browser context from it.
 
-### Three ways to establish the state, tried in order
+### Three ways to establish it, tried in order
 
-1. **Reuse:** load saved state, probe a `requiresAuth` route; if it doesn't bounce to login, done.
-   Zero cost, the common case.
-2. **Scripted login (recommended):** the user supplies a tiny function in config — the only code a
-   user ever writes for vigil, and it's optional:
+1. **Reuse:** if a persisted state exists, probe one `requiresAuth` route; no bounce to login →
+   done. Zero cost, the common case between closely-spaced deploys.
+2. **Scripted login:** the user supplies a function — the only code a vigil user can ever write,
+   and it's optional:
    ```ts
    auth: {
      login: async (page) => {
@@ -110,29 +88,36 @@ most** (and reuses a previous state if it still works), saves the state to
      probeRoute: "/dashboard",
    }
    ```
-3. **Agent-assisted login (zero-config):** if credentials are provided (`VIGIL_USER`/`VIGIL_PASS`)
-   but no script, the Explorer performs the login agentically once — and then **generates the
-   scripted version** and saves it to `.vigil/auth/login.generated.ts`, so subsequent runs use
-   path 2. The cache philosophy applied to auth itself.
+3. **AI-agent login (zero-config):** if `VIGIL_USER`/`VIGIL_PASS` are set but no script is given,
+   vigil hands the login page to a Stagehand agent with the single goal "log in with these
+   credentials" (credentials injected as variables, never into the prompt/LLM — Stagehand
+   supports variable substitution precisely for this). The resulting storageState is used for
+   the run. True to the stateless philosophy, nothing is generated or saved — at most the
+   storageState itself is cached as in (1).
 
-Out of scope for v1, acknowledged: SSO with MFA (recommend a test account with MFA disabled or a
-TOTP secret in config — TOTP generation is a cheap v1.1), multiple roles (v2: run matrix of
-storage states, assets keyed per role).
+Out of scope for v1, acknowledged: SSO with MFA (use a test account with MFA disabled; TOTP
+support is a cheap follow-up), multiple roles (v2: run once per role's storageState).
 
 ### Credential safety rules
-- Credentials only ever come from environment variables; vigil refuses plaintext secrets in config.
-- Storage state and run artifacts are written with `0600` perms and auto-gitignored by `vigil init`.
-- Traces/screenshots for *reporting* redact `Authorization`/`Cookie` headers and any response field
-  matching a configurable denylist (`password`, `token`, `secret`, …) before leaving `.vigil/runs/`.
+- Credentials come only from environment variables; plaintext secrets in config are rejected.
+- Credentials are never sent to the model. Agent login uses variable substitution; the judge
+  never sees auth headers.
+- Screenshots and reports redact `Authorization`/`Cookie` headers and any response field
+  matching a configurable denylist (`password`, `token`, `secret`, …).
 
-## Priorities
+## Safety model (running against production)
 
-Under budget pressure, order matters. Default priority assignment:
-- P0: routes listed in `criticalRoutes` config (e.g. `/`, `/login`, `/checkout`)
-- P1: routes reachable ≤1 click from home; routes with a cached asset (cheap to verify)
-- P2: everything else
-- P3: pattern samples beyond the first per route
+The rules are short because the default behavior is inherently safe:
 
-Scheduling: all P0/P1 hits, then P0/P1 misses, then P2 hits, … Budgets exhaust from the bottom.
+1. **Sanity visits perform zero interactions.** GET navigation, observation, screenshot. Nothing
+   is clicked, typed, or submitted — there is nothing to allowlist.
+2. **The crawler follows links via fresh navigations** (never clicks), same-origin only, and
+   respects `exclude` globs at the request level (e.g. `/logout`, `/admin/**` are never fetched).
+3. **Interactions exist only in user-authored flows and agent login.** Those agent actions obey a
+   non-disableable destructive denylist — elements whose accessible name matches
+   `/delete|remove|cancel subscription|pay|purchase|confirm order|transfer/i` are never clicked
+   unless the flow's own text explicitly names them **and** config sets `allowDestructive: true`
+   (intended for staging).
+4. Everything an agent did is recorded step-by-step in the report — full auditability.
 
-Next: [04-cache.md](04-cache.md) — the asset store and the fingerprint algorithm.
+Next: [04-checks.md](04-checks.md) — what gets captured on every visit.
