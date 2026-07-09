@@ -1,0 +1,141 @@
+// Data models — the precise shape of every entity vigil produces.
+// These types are the stable public API (documentation/08-data-models.md).
+//
+// Phase 1 note: the Judge (Stage 2) is not built yet, so `PageResult.judge` is
+// never populated this phase. The types are kept complete for forward-compat so
+// report.json's schema does not change when the judge lands in Phase 2.
+
+export type ISODate = string; // e.g. "2026-07-08T18:22:09.123Z"
+
+// ── Discovery ───────────────────────────────────────────────────────────────
+
+export type DiscoverySource = "config" | "sitemap" | "crawl";
+
+export interface DiscoveredPage {
+  url: string; // absolute, normalized
+  source: DiscoverySource;
+  patternGroup?: string; // "/products/:n" when parametric collapsing grouped it
+}
+
+export interface PageSet {
+  pages: DiscoveredPage[];
+  generatedAt: ISODate;
+  truncated: boolean; // maxPages cap was hit
+}
+
+// ── Signals (the evidence from one visit) ───────────────────────────────────
+
+export interface RequestSummary {
+  method: string;
+  url: string;
+  resourceType: string; // document|script|xhr|fetch|image|…
+  status: number | null; // null = network failure
+  failure?: string; // playwright failure text
+  durationMs: number;
+  firstParty: boolean;
+  slow: boolean; // > latencyBudgetMs
+  afterSettle: boolean; // completed after capture
+}
+
+export interface ConsoleEntry {
+  text: string;
+  sourceUrl?: string;
+  count: number; // dedupe counter
+}
+
+export interface FlowOutcome {
+  name: string;
+  steps: { instruction: string; ok: boolean; detail: string }[];
+  ok: boolean;
+}
+
+export interface Signals {
+  url: string;
+  finalUrl: string; // after redirects
+  document: {
+    status: number | null; // null = navigation failed
+    redirects: string[];
+    navigationError?: string; // DNS/refused/timeout/TLS text
+    loadMs: number | null;
+    settledMs: number | null;
+  };
+  requests: RequestSummary[]; // every request on the visit
+  console: ConsoleEntry[]; // errors only, deduped, capped
+  pageErrors: string[]; // uncaught exceptions (message + stack head)
+  crashed: boolean;
+  render: {
+    textLength: number;
+    title: string;
+    h1: string | null;
+    errorMarkersFound: string[];
+    spinnerStuck: boolean;
+    screenshotLooksBlank: boolean; // downsampled screenshot ≈ uniform color
+  };
+  flows: FlowOutcome[]; // empty unless flows configured for this page
+  screenshotPath: string;
+  timedOut: boolean; // per-page visit cap hit
+}
+
+// ── Judgment ────────────────────────────────────────────────────────────────
+
+export type PageStatus = "pass" | "warn" | "fail" | "skipped";
+
+export type HardRule = "H1" | "H2" | "H3" | "H4" | "H5";
+
+export interface JudgeReason {
+  kind: "console" | "network" | "render" | "visual" | "flow";
+  summary: string; // one plain-English sentence
+  evidence: string; // cites a concrete signal / visible element
+}
+
+export interface JudgeVerdict {
+  status: "pass" | "warn" | "fail";
+  confidence: number; // 0–1
+  reasons: JudgeReason[];
+}
+
+export interface PageResult {
+  url: string;
+  source: DiscoverySource;
+  status: PageStatus;
+  headline: string; // the one line shown in summaries
+  decidedBy: "hard-rule" | "judge" | "budget" | "skipped";
+  hardRule?: HardRule;
+  judge?: JudgeVerdict; // absent for hard rules / unjudged
+  unjudged?: boolean; // model budget/outage — hard rules only ran
+  retried: boolean;
+  flaky: boolean; // failed then passed on retry
+  signals: Signals; // first capture
+  retrySignals?: Signals; // present when retried
+  timings: { visitMs: number; judgeMs?: number };
+  cost: { judgeUsd: number; flowsUsd: number };
+}
+
+// ── Run result (the object `runSanity` returns) ─────────────────────────────
+
+export type RunVerdict = "HEALTHY" | "DEGRADED" | "BROKEN" | "INCONCLUSIVE";
+
+export interface RunResult {
+  schemaVersion: 1;
+  runId: string;
+  verdict: RunVerdict;
+  target: { url: string; deployRef?: string }; // deployRef = git SHA if provided
+  startedAt: ISODate;
+  durationMs: number;
+  counts: { pass: number; warn: number; fail: number; skipped: number };
+  cost: { modelCalls: number; modelUsd: number };
+  budgetsExhausted: string[]; // e.g. ["maxModelCostUsd"]
+  pages: PageResult[];
+  artifactsDir: string;
+}
+
+// ── Events (the `vigil.events` emitter) ─────────────────────────────────────
+
+export interface VigilEvents {
+  "run:start": (info: { runId: string; pageSet: PageSet }) => void;
+  "page:start": (info: { url: string }) => void;
+  "page:complete": (result: PageResult) => void;
+  "flow:step": (info: { page: string; flow: string; step: string; ok: boolean }) => void;
+  "run:budget": (info: { budget: string; remaining: number }) => void;
+  "run:complete": (result: RunResult) => void;
+}

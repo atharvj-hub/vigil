@@ -28,8 +28,70 @@ A 100-page app checks out in ~2–4 minutes for well under a dollar.
 
 ## Status
 
-Design phase. The full design lives in [`documentation/`](documentation/README.md) — read it in
-order, starting with the [overview](documentation/01-overview.md).
+**Phase 1 implemented — the deterministic core, no AI yet.** `vigil run --url X` discovers an
+app's pages, visits each in a real browser, and returns a trustworthy verdict from hard rules
+alone (5xx, crashes, blank screens, 404s on linked pages) plus a conservative deterministic
+warn tier. The AI judge, auth, and natural-language flows are designed (see `documentation/`)
+and land in Phases 2–3. Phase 1 is already a shippable "smart smoke test".
+
+The full design lives in [`documentation/`](documentation/README.md) — read it in order,
+starting with the [overview](documentation/01-overview.md).
+
+## Quickstart
+
+```bash
+npm install
+npx playwright install chromium     # one-time: download the browser
+
+# check any deployed app (no config needed):
+npx tsx src/cli.ts run --url https://your-app.example.com
+# exit 0 = healthy · 1 = broken · 2 = degraded (with --fail-on degraded) · 3 = inconclusive
+
+# or try it against the bundled fixture app (clean + deliberately-broken pages):
+node test/fixtures/app.mjs 8787          # terminal 1
+npx tsx src/cli.ts run --url http://127.0.0.1:8787   # terminal 2
+```
+
+Each run writes `vigil-report/<run-id>/` — open `report.html` for screenshots + evidence.
+
+### CLI
+
+```
+vigil run [--url] [--fail-on broken|degraded] [--only <glob>] [--json]
+vigil discover [--url]        print the Page Set (dry run of discovery)
+vigil check <url-or-path>     check a single page (fast feedback)
+vigil init                    scaffold vigil.config.ts + .gitignore entries
+vigil report [run-id]         open the HTML report
+```
+
+(Run these as `npx tsx src/cli.ts <cmd>` in dev, or `node dist/cli.js <cmd>` after `npm run build`.)
+
+### Programmatic
+
+```ts
+import { runSanity } from "vigil";
+
+const result = await runSanity({ url: "https://your-app.example.com" });
+if (result.verdict === "BROKEN") {
+  for (const p of result.pages.filter((p) => p.status === "fail")) console.error(p.url, p.headline);
+  process.exit(1);
+}
+```
+
+## Development
+
+```bash
+npm test          # unit tests — fast, no browser, CI-safe (pure logic)
+npm run test:e2e  # integration — real Chromium against the fixture app (~40s)
+npm run test:all  # everything
+npm run typecheck # tsc --noEmit
+npm run build     # emit dist/
+```
+
+`test/unit/` covers discovery/normalization, hard rules, the warn tier, config validation, the
+verdict rollup + environmental override, and reporting. `test/integration/` drives the whole
+pipeline end to end against `test/fixtures/app.mjs`, asserting that injected breakages (500,
+blank render, chunk-404) are caught and clean pages pass — with **zero false reds**.
 
 ## Documentation
 

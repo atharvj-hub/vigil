@@ -52,3 +52,7 @@ Thumbs.db
 .tmp/
 tmp/
 .eslintcache
+
+# vigil (generated artifacts + cached auth state)
+vigil-report/
+.vigil-auth.json

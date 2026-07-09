@@ -1,0 +1,294 @@
+// Collector — visits ONE page and captures the Signals + screenshot (doc 04).
+// Pure observation: it navigates and records; it never clicks, types, or submits
+// (02-architecture.md: "Collector is pure observation").
+//
+// The settle protocol (doc 04) is the flake-control-at-the-source:
+//   1. await 'load' (hard cap 15s — a timeout is a signal, not an exception)
+//   2. network-quiet window: ≤2 in-flight for 750ms, capped 10s (ws/sse exempt)
+//   3. 250ms paint grace, animations disabled
+//   4. capture
+
+import type { Browser, Request } from "playwright";
+import type { Signals, RequestSummary, ConsoleEntry } from "./types.js";
+
+const LOAD_CAP_MS = 15_000;
+const QUIET_WINDOW_MS = 750;
+const QUIET_MAX_MS = 10_000;
+const QUIET_INFLIGHT_MAX = 2;
+const PAINT_GRACE_MS = 250;
+const MAX_CONSOLE = 20;
+// Cap on the screenshot itself. Playwright's screenshot waits for document.fonts
+// to be ready, which never resolves while a resource hangs — so without a bound
+// it burns its full 30s default on any slow page and blows the per-page budget.
+const SCREENSHOT_CAP_MS = 10_000;
+
+// Resource types exempt from the network-quiet count (long-lived by nature).
+const QUIET_EXEMPT = new Set(["websocket", "eventsource"]);
+
+// Built-in framework error-page / error-boundary markers (doc 04).
+const BUILTIN_MARKERS = [
+  /application error/i,
+  /something went wrong/i,
+  /internal server error/i,
+  /this page (isn'?t|is not) working/i,
+  /500\s*[-–]\s*internal/i,
+];
+
+const DISABLE_ANIM_CSS = `*,*::before,*::after{animation-duration:0s!important;animation-delay:0s!important;transition-duration:0s!important;transition-delay:0s!important;caret-color:transparent!important;scroll-behavior:auto!important;}`;
+
+// Passed to addInitScript as a raw string (not a function) so no bundler/transform
+// can inject helpers (e.g. esbuild's `__name`) that would throw in page context.
+const DISABLE_ANIM_INIT = `(() => {
+  var css = ${JSON.stringify(DISABLE_ANIM_CSS)};
+  var apply = function () {
+    var s = document.createElement("style");
+    s.textContent = css;
+    (document.documentElement || document.head || document.body).appendChild(s);
+  };
+  if (document.documentElement) apply();
+  else document.addEventListener("DOMContentLoaded", apply);
+})();`;
+
+export interface CollectOptions {
+  origin: string;
+  screenshotPath: string;
+  viewport: { width: number; height: number };
+  latencyBudgetMs: number;
+  errorMarkers: RegExp[];
+  consoleAllowlist: RegExp[];
+  perPageVisitMs: number;
+}
+
+export async function collect(browser: Browser, url: string, opts: CollectOptions): Promise<Signals> {
+  const started = Date.now();
+  const context = await browser.newContext({
+    viewport: opts.viewport,
+    reducedMotion: "reduce",
+    ignoreHTTPSErrors: false,
+  });
+  await context.addInitScript(DISABLE_ANIM_INIT);
+
+  const page = await context.newPage();
+
+  // ── Listeners attached BEFORE navigation ──
+  let crashed = false;
+  page.on("crash", () => (crashed = true));
+
+  const pageErrors: string[] = [];
+  page.on("pageerror", (err) => {
+    const stackHead = (err.stack ?? "").split("\n").slice(0, 2).join(" ").trim();
+    pageErrors.push(stackHead || err.message);
+  });
+
+  const consoleMap = new Map<string, ConsoleEntry>();
+  page.on("console", (msg) => {
+    if (msg.type() !== "error") return;
+    const text = msg.text();
+    if (opts.consoleAllowlist.some((re) => re.test(text))) return;
+    const existing = consoleMap.get(text);
+    if (existing) existing.count++;
+    else if (consoleMap.size < MAX_CONSOLE)
+      consoleMap.set(text, { text, sourceUrl: msg.location()?.url || undefined, count: 1 });
+  });
+
+  // Network tracking.
+  let inFlight = 0;
+  let settledAt = Number.POSITIVE_INFINITY; // set at capture; anything later is afterSettle
+  const reqStart = new WeakMap<Request, number>();
+  const requests: RequestSummary[] = [];
+
+  const isExempt = (r: Request) => QUIET_EXEMPT.has(r.resourceType());
+
+  page.on("request", (req) => {
+    reqStart.set(req, Date.now());
+    if (!isExempt(req)) inFlight++;
+  });
+  const finalize = async (req: Request, failure?: string) => {
+    if (!isExempt(req)) inFlight = Math.max(0, inFlight - 1);
+    const start = reqStart.get(req) ?? Date.now();
+    const durationMs = Date.now() - start;
+    let status: number | null = null;
+    if (!failure) {
+      try {
+        status = (await req.response())?.status() ?? null;
+      } catch {
+        status = null;
+      }
+    }
+    let firstParty = false;
+    try {
+      firstParty = new URL(req.url()).origin === opts.origin;
+    } catch {
+      /* keep false */
+    }
+    requests.push({
+      method: req.method(),
+      url: req.url(),
+      resourceType: req.resourceType(),
+      status,
+      failure,
+      durationMs,
+      firstParty,
+      slow: durationMs > opts.latencyBudgetMs,
+      afterSettle: Date.now() > settledAt,
+    });
+  };
+  page.on("requestfinished", (req) => void finalize(req));
+  page.on("requestfailed", (req) => void finalize(req, req.failure()?.errorText ?? "request failed"));
+
+  // ── Navigate ──
+  const redirects: string[] = [];
+  let status: number | null = null;
+  let navigationError: string | undefined;
+  let loadMs: number | null = null;
+  let timedOut = false;
+
+  const navStart = Date.now();
+  let response: import("playwright").Response | null = null;
+  try {
+    // "commit" resolves as soon as the server responds and navigation commits,
+    // so we capture the document status even when the load event never fires.
+    // A genuine navigation failure (DNS, refused, TLS, zero-byte timeout) throws
+    // here → H1. A merely slow *load* is handled below as a signal, not a failure.
+    response = await page.goto(url, { waitUntil: "commit", timeout: LOAD_CAP_MS });
+  } catch (err) {
+    navigationError = firstLine(err instanceof Error ? err.message : String(err));
+  }
+
+  if (response) {
+    status = response.status();
+    for (const r of collectRedirectChain(response)) redirects.push(r);
+    // Soft-wait for the load event; a timeout here is a signal (warn), not H1.
+    try {
+      await page.waitForLoadState("load", { timeout: LOAD_CAP_MS });
+      loadMs = Date.now() - navStart;
+    } catch {
+      timedOut = true;
+    }
+  }
+
+  // ── Network-quiet window (only meaningful if navigation produced a document) ──
+  let settledMs: number | null = null;
+  if (navigationError === undefined) {
+    await waitForNetworkQuiet(() => inFlight, () => elapsed(started) > opts.perPageVisitMs);
+    await page.waitForTimeout(PAINT_GRACE_MS);
+    settledMs = Date.now() - navStart;
+    if (elapsed(started) > opts.perPageVisitMs) timedOut = true;
+  }
+  settledAt = Date.now();
+
+  // ── Capture render heuristics + screenshot ──
+  const allMarkers = [...BUILTIN_MARKERS, ...opts.errorMarkers];
+  let render: Signals["render"] = {
+    textLength: 0,
+    title: "",
+    h1: null,
+    errorMarkersFound: [],
+    spinnerStuck: false,
+    screenshotLooksBlank: true,
+  };
+  let finalUrl = url;
+  if (navigationError === undefined && !crashed) {
+    finalUrl = page.url();
+    try {
+      const dom = await page.evaluate(() => {
+        const text = document.body ? document.body.innerText : "";
+        const h1 = document.querySelector("h1");
+        const spinnerSel = '[role="progressbar"],[aria-busy="true"],.spinner,.loading,.loader';
+        const spinnerVisible = Array.from(document.querySelectorAll(spinnerSel)).some((el) => {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          const style = getComputedStyle(el as HTMLElement);
+          return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+        });
+        // Cheap "blank screen" proxy: no meaningful visible media and near-zero text.
+        const media = Array.from(document.querySelectorAll("img,svg,canvas,video,picture")).some((el) => {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          return r.width > 8 && r.height > 8;
+        });
+        const visibleEls = Array.from(document.body?.querySelectorAll("*") ?? []).filter((el) => {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          return r.width > 4 && r.height > 4;
+        }).length;
+        return {
+          text,
+          title: document.title,
+          h1: h1 ? h1.textContent?.trim() || null : null,
+          spinnerVisible,
+          hasMedia: media,
+          visibleEls,
+        };
+      });
+      const found = allMarkers.filter((re) => re.test(dom.text)).map((re) => re.source);
+      render = {
+        textLength: dom.text.trim().length,
+        title: dom.title,
+        h1: dom.h1,
+        errorMarkersFound: found,
+        spinnerStuck: dom.spinnerVisible,
+        screenshotLooksBlank: dom.text.trim().length < 40 && !dom.hasMedia && dom.visibleEls < 3,
+      };
+    } catch {
+      /* leave render defaults (blank) — evaluation failing is itself broken-ish */
+    }
+    try {
+      // Bound the screenshot to the remaining per-page budget so a hanging page
+      // (fonts never ready) can't stall the whole visit on its 30s default.
+      const remaining = opts.perPageVisitMs - elapsed(started);
+      const timeout = Math.max(2000, Math.min(SCREENSHOT_CAP_MS, remaining));
+      await page.screenshot({ path: opts.screenshotPath, timeout, animations: "disabled" });
+    } catch {
+      /* screenshot best-effort — a page too broken to snapshot is already flagged */
+    }
+  }
+
+  await context.close();
+
+  return {
+    url,
+    finalUrl,
+    document: {
+      status,
+      redirects,
+      navigationError,
+      loadMs,
+      settledMs,
+    },
+    requests,
+    console: [...consoleMap.values()],
+    pageErrors,
+    crashed,
+    render,
+    flows: [],
+    screenshotPath: opts.screenshotPath,
+    timedOut,
+  };
+}
+
+function collectRedirectChain(response: import("playwright").Response): string[] {
+  const chain: string[] = [];
+  let req: import("playwright").Request | null = response.request();
+  while (req) {
+    const from = req.redirectedFrom();
+    if (from) chain.unshift(from.url());
+    req = from;
+  }
+  return chain;
+}
+
+async function waitForNetworkQuiet(inFlight: () => number, budgetExceeded: () => boolean): Promise<void> {
+  const start = Date.now();
+  let quietSince: number | null = null;
+  while (Date.now() - start < QUIET_MAX_MS) {
+    if (budgetExceeded()) return;
+    if (inFlight() <= QUIET_INFLIGHT_MAX) {
+      if (quietSince === null) quietSince = Date.now();
+      else if (Date.now() - quietSince >= QUIET_WINDOW_MS) return;
+    } else {
+      quietSince = null;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+const elapsed = (since: number) => Date.now() - since;
+const firstLine = (s: string) => s.split("\n")[0]!.trim();

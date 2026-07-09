@@ -1,0 +1,46 @@
+{
+  "name": "vigil",
+  "version": "0.1.0",
+  "description": "Post-deploy sanity checker — deterministic capture, AI judgment. Stateless by design.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "bin": {
+    "vigil": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run test/unit",
+    "test:e2e": "vitest run test/integration",
+    "test:all": "vitest run",
+    "test:watch": "vitest test/unit",
+    "cli": "tsx src/cli.ts",
+    "fixture": "node test/fixtures/app.mjs"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "fast-xml-parser": "^4.5.0",
+    "zod": "^3.23.8"
+  },
+  "peerDependencies": {
+    "playwright": "^1.47.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "playwright": "^1.47.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
