@@ -21,6 +21,7 @@ import { resolveConfig, type ResolvedConfig, type VigilConfig } from "./config.j
 import { discover } from "./discovery/index.js";
 import { collect } from "./collector.js";
 import { evaluateRules, type RuleDecision } from "./judge/hardRules.js";
+import { evaluateDataFidelity } from "./judge/dataFidelity.js";
 import { writeReport } from "./reporter/index.js";
 import { TypedEmitter } from "./util/emitter.js";
 import { slugForUrl, uniqueSlug } from "./util/slug.js";
@@ -64,7 +65,20 @@ export class Vigil {
     const browser = await this.launch();
     const budgetsExhausted = new Set<string>();
     let pages: PageResult[] = [];
-    let pageSet: PageSet = { pages: [], generatedAt: startedAt.toISOString(), truncated: false };
+    let pageSet: PageSet = {
+      pages: [],
+      generatedAt: startedAt.toISOString(),
+      truncated: false,
+      coverage: {
+        config: 0,
+        sitemap: { sitemapsFetched: 0, urlsDeclared: 0 },
+        crawl: { urlsFound: 0 },
+        api: { graphqlEndpoint: null, openapiEndpoint: null, candidatesGenerated: 0, candidatesConfirmed: 0 },
+        duplicatesDropped: 0,
+        samplingDropped: 0,
+        capDropped: 0,
+      },
+    };
 
     try {
       pageSet = await discover(this.config, browser);
@@ -93,6 +107,7 @@ export class Vigil {
       cost: { modelCalls: 0, modelUsd: 0 }, // no model in Phase 1
       budgetsExhausted: [...budgetsExhausted],
       pages,
+      coverage: pageSet.coverage,
       artifactsDir,
     };
 
@@ -164,11 +179,22 @@ export class Vigil {
       errorMarkers: this.config.checks.errorMarkers,
       consoleAllowlist: this.config.checks.consoleErrorAllowlist,
       perPageVisitMs: this.config.budgets.perPageVisitMs,
+      dataFidelity: this.config.checks.dataFidelity,
     };
 
     const t0 = Date.now();
     const signals = await collect(browser, page.url, { ...opts, screenshotPath: join(pagesDir, `${slug}.png`) });
     let decision = evaluateRules(signals);
+
+    // Data-fidelity is a separate, opt-in, warn-only signal — it never
+    // overrides a hard fail and is reported through its own field rather than
+    // merged into the hard-rule warn tier, so it stays visible on its own.
+    const fidelity = evaluateDataFidelity(signals, this.config.checks.dataFidelity);
+    const fidelityWarnings = fidelity.warnReasons.length > 0 ? fidelity.warnReasons : undefined;
+    if (fidelityWarnings && decision.status === "pass") {
+      decision = { ...decision, status: "warn", headline: fidelityWarnings[0]! };
+    }
+
     let retried = false;
     let flaky = false;
     let retrySignals: Signals | undefined;
@@ -193,7 +219,7 @@ export class Vigil {
     }
 
     const visitMs = Date.now() - t0;
-    return toPageResult(page, decision, signals, retrySignals, { retried, flaky, visitMs });
+    return toPageResult(page, decision, signals, retrySignals, { retried, flaky, visitMs, fidelityWarnings });
   }
 }
 
@@ -204,7 +230,7 @@ function toPageResult(
   decision: RuleDecision,
   signals: Signals,
   retrySignals: Signals | undefined,
-  meta: { retried: boolean; flaky: boolean; visitMs: number }
+  meta: { retried: boolean; flaky: boolean; visitMs: number; fidelityWarnings?: string[] }
 ): PageResult {
   return {
     url: page.url,
@@ -213,6 +239,7 @@ function toPageResult(
     headline: decision.headline,
     decidedBy: "hard-rule", // Phase 1: the deterministic rule engine decides every page
     hardRule: decision.hardRule,
+    fidelityWarnings: meta.fidelityWarnings,
     retried: meta.retried,
     flaky: meta.flaky,
     signals,
@@ -246,7 +273,16 @@ function emptySignals(url: string): Signals {
     console: [],
     pageErrors: [],
     crashed: false,
-    render: { textLength: 0, title: "", h1: null, errorMarkersFound: [], spinnerStuck: false, screenshotLooksBlank: true },
+    render: {
+      textLength: 0,
+      title: "",
+      h1: null,
+      textSample: "",
+      errorMarkersFound: [],
+      spinnerStuck: false,
+      screenshotLooksBlank: true,
+    },
+    contentFields: {},
     flows: [],
     screenshotPath: "",
     timedOut: false,

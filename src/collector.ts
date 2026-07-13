@@ -17,6 +17,8 @@ const QUIET_MAX_MS = 10_000;
 const QUIET_INFLIGHT_MAX = 2;
 const PAINT_GRACE_MS = 250;
 const MAX_CONSOLE = 20;
+const MAX_TEXT_SAMPLE = 2_000; // bounded rendered-text sample for data-fidelity matching — never the full body
+const MAX_FIDELITY_BODY_BYTES = 500_000; // only a couple of named scalar fields get extracted, so this stays small
 // Cap on the screenshot itself. Playwright's screenshot waits for document.fonts
 // to be ready, which never resolves while a resource hangs — so without a bound
 // it burns its full 30s default on any slow page and blows the per-page budget.
@@ -57,6 +59,29 @@ export interface CollectOptions {
   errorMarkers: RegExp[];
   consoleAllowlist: RegExp[];
   perPageVisitMs: number;
+  dataFidelity: { apiPathPatterns: RegExp[]; fields: string[] };
+}
+
+/** Recursively pull named scalar fields out of a parsed JSON value (bounded depth). */
+function extractNamedFields(
+  node: unknown,
+  fieldNames: Set<string>,
+  out: Record<string, string | number>,
+  depth = 0
+): void {
+  if (depth > 6 || node == null) return;
+  if (Array.isArray(node)) {
+    for (const item of node) extractNamedFields(item, fieldNames, out, depth + 1);
+    return;
+  }
+  if (typeof node !== "object") return;
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if ((typeof value === "string" || typeof value === "number") && fieldNames.has(key) && !(key in out)) {
+      out[key] = value;
+    } else if (value && typeof value === "object") {
+      extractNamedFields(value, fieldNames, out, depth + 1);
+    }
+  }
 }
 
 export async function collect(browser: Browser, url: string, opts: CollectOptions): Promise<Signals> {
@@ -96,6 +121,8 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
   let settledAt = Number.POSITIVE_INFINITY; // set at capture; anything later is afterSettle
   const reqStart = new WeakMap<Request, number>();
   const requests: RequestSummary[] = [];
+  const contentFields: Record<string, string | number> = {};
+  const fidelityFieldNames = new Set(opts.dataFidelity.fields);
 
   const isExempt = (r: Request) => QUIET_EXEMPT.has(r.resourceType());
 
@@ -108,9 +135,11 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
     const start = reqStart.get(req) ?? Date.now();
     const durationMs = Date.now() - start;
     let status: number | null = null;
+    let response: import("playwright").Response | null = null;
     if (!failure) {
       try {
-        status = (await req.response())?.status() ?? null;
+        response = await req.response();
+        status = response?.status() ?? null;
       } catch {
         status = null;
       }
@@ -120,6 +149,26 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
       firstParty = new URL(req.url()).origin === opts.origin;
     } catch {
       /* keep false */
+    }
+    // Data-fidelity extraction: only for first-party, successful JSON responses
+    // matching a configured content-API pattern — never the whole body, only
+    // the specific named fields the user asked for.
+    if (
+      fidelityFieldNames.size > 0 &&
+      response &&
+      firstParty &&
+      status !== null &&
+      status < 400 &&
+      opts.dataFidelity.apiPathPatterns.some((re) => re.test(req.url()))
+    ) {
+      try {
+        const body = await response.text();
+        if (body.length <= MAX_FIDELITY_BODY_BYTES) {
+          extractNamedFields(JSON.parse(body), fidelityFieldNames, contentFields);
+        }
+      } catch {
+        /* not JSON, or body unavailable — this is best-effort evidence, not a check itself */
+      }
     }
     requests.push({
       method: req.method(),
@@ -183,6 +232,7 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
     textLength: 0,
     title: "",
     h1: null,
+    textSample: "",
     errorMarkersFound: [],
     spinnerStuck: false,
     screenshotLooksBlank: true,
@@ -223,6 +273,7 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
         textLength: dom.text.trim().length,
         title: dom.title,
         h1: dom.h1,
+        textSample: dom.text.trim().slice(0, MAX_TEXT_SAMPLE),
         errorMarkersFound: found,
         spinnerStuck: dom.spinnerVisible,
         screenshotLooksBlank: dom.text.trim().length < 40 && !dom.hasMedia && dom.visibleEls < 3,
@@ -258,6 +309,7 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
     pageErrors,
     crashed,
     render,
+    contentFields,
     flows: [],
     screenshotPath: opts.screenshotPath,
     timedOut,

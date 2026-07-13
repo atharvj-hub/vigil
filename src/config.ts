@@ -24,6 +24,19 @@ const DiscoverySchema = z
         politenessMs: z.number().int().min(0).default(0),
       })
       .default({}),
+    // Schema-driven discovery (documentation/03): probe for an introspectable
+    // GraphQL endpoint and an OpenAPI/Swagger doc; if either is exposed, call
+    // the list operations it declares and turn returned slugs/ids into page
+    // URLs against a pattern already confirmed by the sitemap/crawl. Every
+    // candidate is confirmed live (HEAD/GET) before it's trusted. Catches SPA
+    // "card" pages with no real <a href> and no sitemap entry.
+    api: z
+      .object({
+        enabled: z.boolean().default(true),
+        maxCandidates: z.number().int().min(0).default(40), // caps verification requests per run
+        timeoutMs: z.number().int().min(100).default(5000),
+      })
+      .default({}),
     include: z.array(z.string()).default(["/**"]),
     exclude: z.array(z.string()).default([]),
     samplesPerPattern: z.number().int().min(1).default(2),
@@ -65,6 +78,20 @@ const ChecksSchema = z
       .object({ width: z.number().int().default(1280), height: z.number().int().default(720) })
       .default({}),
     browser: z.enum(["chromium", "firefox", "webkit"]).default("chromium"),
+    // Data-fidelity (opt-in, off by default): does a named content field's
+    // value — read from a first-party JSON response matching apiPathPatterns —
+    // actually appear in the rendered page text? Catches the backend-returns-
+    // correct-data-but-the-frontend-doesn't-render-it-right class of bug
+    // (field rename, broken i18n key, stale mapping) that H1-H5 and the warn
+    // tier structurally can't see. Warn-only, never promoted to a hard fail —
+    // text-matching is inherently heuristic (truncation, casing, i18n).
+    dataFidelity: z
+      .object({
+        enabled: z.boolean().default(false),
+        apiPathPatterns: z.array(regex).default([]), // which request URLs count as "content API"
+        fields: z.array(z.string()).default([]), // JSON field names to extract & check
+      })
+      .default({}),
   })
   .default({});
 

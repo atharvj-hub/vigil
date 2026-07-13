@@ -18,6 +18,15 @@ function result(over: Partial<RunResult> = {}): RunResult {
       { url: "https://app.example.com/account", source: "crawl", status: "warn", headline: "console error from a widget", decidedBy: "hard-rule", retried: false, flaky: false, signals: {} as any, timings: { visitMs: 1 }, cost: { judgeUsd: 0, flowsUsd: 0 } },
       { url: "https://app.example.com/", source: "config", status: "pass", headline: "clean", decidedBy: "hard-rule", retried: false, flaky: false, signals: {} as any, timings: { visitMs: 1 }, cost: { judgeUsd: 0, flowsUsd: 0 } },
     ],
+    coverage: {
+      config: 1,
+      sitemap: { sitemapsFetched: 1, urlsDeclared: 2 },
+      crawl: { urlsFound: 1 },
+      api: { graphqlEndpoint: null, openapiEndpoint: null, candidatesGenerated: 0, candidatesConfirmed: 0 },
+      duplicatesDropped: 0,
+      samplingDropped: 0,
+      capDropped: 0,
+    },
     artifactsDir: "vigil-report/2026-07-09T06-00-00_abcd",
     ...over,
   };

@@ -4,7 +4,7 @@
 
 import { readFile } from "node:fs/promises";
 import type { PageResult, RunResult, Signals } from "../types.js";
-import { pathOf, hostOf, fmtDuration, statusOrder } from "./index.js";
+import { pathOf, hostOf, fmtDuration, statusOrder, coverageLine } from "./index.js";
 
 const STATUS_LABEL: Record<PageResult["status"], string> = {
   fail: "FAIL",
@@ -55,6 +55,7 @@ export async function renderHtml(result: RunResult): Promise<string> {
   <div class="sub">${esc(hostOf(result.target.url))} — ${summary}</div>
 </header>
 <section class="meta">${meta}</section>
+<section class="coverage"><b>Coverage</b> — ${esc(coverageLine(result.coverage))}</section>
 <section>
   <h2>Pages</h2>
   <table class="pages">
@@ -90,9 +91,16 @@ async function detailHtml(p: PageResult): Promise<string> {
   <div class="detail-body">
     ${p.flaky ? `<p class="note">Passed on retry — recorded as flaky.</p>` : ""}
     <div class="shots">${shot}${retryShot}</div>
+    ${fidelityEvidence(p.fidelityWarnings)}
     ${evidence}
   </div>
 </details>`;
+}
+
+function fidelityEvidence(warnings: string[] | undefined): string {
+  if (!warnings || warnings.length === 0) return "";
+  const items = warnings.map((w) => `<li>${esc(w)}</li>`).join("");
+  return `<div class="evi"><h4>Data fidelity</h4><ul>${items}</ul></div>`;
 }
 
 function signalEvidence(s: Signals): string {
@@ -168,6 +176,8 @@ const CSS = `
 .meta{display:flex;flex-wrap:wrap;gap:1.25rem;padding:1rem 2rem;border-bottom:1px solid var(--line)}
 .meta-item span{display:block;color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.04em}
 .meta-item b{font-size:.95rem}
+.coverage{padding:.6rem 2rem;border-bottom:1px solid var(--line);font-size:.82rem;color:var(--muted)}
+.coverage b{color:var(--fg)}
 section{padding:1.25rem 2rem}h2{font-size:1.1rem;margin:.5rem 0 1rem}h4{margin:.75rem 0 .35rem;font-size:.82rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
 table.pages{width:100%;border-collapse:collapse;font-size:.9rem}
 .pages th{text-align:left;color:var(--muted);font-weight:600;font-size:.72rem;text-transform:uppercase;padding:.4rem .6rem;border-bottom:1px solid var(--line)}

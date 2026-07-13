@@ -87,11 +87,11 @@ export function passesGlobs(path: string, include: string[], exclude: string[]):
 
 // ── Parametric collapsing ────────────────────────────────────────────────────
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const HEX_HASH = /^[0-9a-f]{16,}$/i;
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const HEX_HASH = /^[0-9a-f]{16,}$/i;
 
 /** Replace high-cardinality segments with placeholders to yield a pattern key. */
-function pathPattern(pathname: string): { pattern: string; parametric: boolean } {
+export function pathPattern(pathname: string): { pattern: string; parametric: boolean } {
   const segs = pathname.split("/");
   let parametric = false;
   const out = segs.map((s) => {

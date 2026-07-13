@@ -10,6 +10,7 @@
 // it works on any port. Importable for tests via startFixture(); runnable via
 //   node test/fixtures/app.mjs [port]
 import { createServer } from "node:http";
+import { pathToFileURL } from "node:url";
 
 const html = (title, body) =>
   `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head><body>${body}</body></html>`;
@@ -80,7 +81,7 @@ function send(res, status, type, body) {
 }
 
 // Run directly: `node test/fixtures/app.mjs [port]`
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, "/")}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.argv[2] ?? 8787);
   startFixture(port).then(({ url }) => console.log(`fixture app on ${url}`));
 }

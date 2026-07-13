@@ -11,7 +11,7 @@ import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { Vigil } from "./orchestrator.js";
 import type { VigilConfig } from "./config.js";
-import { printSummary, pathOf, exitCode } from "./reporter/index.js";
+import { printSummary, pathOf, exitCode, coverageLine } from "./reporter/index.js";
 
 const program = new Command();
 program.name("vigil").description("Post-deploy sanity checker — deterministic capture, AI judgment.");
@@ -56,6 +56,7 @@ program
       for (const p of set.pages) {
         process.stdout.write(`  ${p.source.padEnd(8)} ${pathOf(p.url)}${p.patternGroup ? `  [${p.patternGroup}]` : ""}\n`);
       }
+      process.stdout.write(`\ncoverage: ${coverageLine(set.coverage)}\n`);
     });
   });
 

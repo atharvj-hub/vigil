@@ -9,7 +9,7 @@ export type ISODate = string; // e.g. "2026-07-08T18:22:09.123Z"
 
 // ── Discovery ───────────────────────────────────────────────────────────────
 
-export type DiscoverySource = "config" | "sitemap" | "crawl";
+export type DiscoverySource = "config" | "sitemap" | "crawl" | "api";
 
 export interface DiscoveredPage {
   url: string; // absolute, normalized
@@ -17,10 +17,30 @@ export interface DiscoveredPage {
   patternGroup?: string; // "/products/:n" when parametric collapsing grouped it
 }
 
+/**
+ * How many candidates each source actually contributed, and what got dropped
+ * along the way — the answer to "did discovery hit all the pages?"
+ */
+export interface DiscoveryCoverage {
+  config: number; // explicit config routes (always kept)
+  sitemap: { sitemapsFetched: number; urlsDeclared: number };
+  crawl: { urlsFound: number };
+  api: {
+    graphqlEndpoint: string | null; // set only if introspection responded
+    openapiEndpoint: string | null; // set only if a spec doc was found
+    candidatesGenerated: number;
+    candidatesConfirmed: number;
+  };
+  duplicatesDropped: number; // same URL from >1 source, or repeated
+  samplingDropped: number; // parametric families collapsed to samples
+  capDropped: number; // dropped by maxPages after everything else
+}
+
 export interface PageSet {
   pages: DiscoveredPage[];
   generatedAt: ISODate;
   truncated: boolean; // maxPages cap was hit
+  coverage: DiscoveryCoverage;
 }
 
 // ── Signals (the evidence from one visit) ───────────────────────────────────
@@ -67,10 +87,12 @@ export interface Signals {
     textLength: number;
     title: string;
     h1: string | null;
+    textSample: string; // bounded (~2000 chars) rendered text — data-fidelity matches against this, never the full body
     errorMarkersFound: string[];
     spinnerStuck: boolean;
     screenshotLooksBlank: boolean; // downsampled screenshot ≈ uniform color
   };
+  contentFields: Record<string, string | number>; // fields pulled from a matching content-API response, per checks.dataFidelity config — empty unless configured
   flows: FlowOutcome[]; // empty unless flows configured for this page
   screenshotPath: string;
   timedOut: boolean; // per-page visit cap hit
@@ -105,6 +127,7 @@ export interface PageResult {
   unjudged?: boolean; // model budget/outage — hard rules only ran
   retried: boolean;
   flaky: boolean; // failed then passed on retry
+  fidelityWarnings?: string[]; // data-fidelity mismatches (checks.dataFidelity) — separate from hardRule warns so they're always visible in the report
   signals: Signals; // first capture
   retrySignals?: Signals; // present when retried
   timings: { visitMs: number; judgeMs?: number };
@@ -126,6 +149,7 @@ export interface RunResult {
   cost: { modelCalls: number; modelUsd: number };
   budgetsExhausted: string[]; // e.g. ["maxModelCostUsd"]
   pages: PageResult[];
+  coverage: DiscoveryCoverage;
   artifactsDir: string;
 }
 

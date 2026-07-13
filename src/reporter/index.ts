@@ -53,7 +53,30 @@ export function buildSummary(result: RunResult): string {
   if (result.budgetsExhausted.length)
     lines.push("", `_budgets exhausted: ${result.budgetsExhausted.join(", ")}_`);
 
+  lines.push("", `_coverage: ${coverageLine(result.coverage)}_`);
+
   return lines.join("\n") + "\n";
+}
+
+/** The one-line answer to "did discovery hit all the pages?" (documentation/03). */
+export function coverageLine(cov: RunResult["coverage"]): string {
+  const parts = [
+    `sitemap ${cov.sitemap.urlsDeclared} url(s) across ${cov.sitemap.sitemapsFetched} sitemap doc(s)`,
+    `crawl found ${cov.crawl.urlsFound}`,
+    `config ${cov.config}`,
+  ];
+  if (cov.api.graphqlEndpoint || cov.api.openapiEndpoint) {
+    const schemas = [cov.api.graphqlEndpoint && "graphql", cov.api.openapiEndpoint && "openapi"]
+      .filter(Boolean)
+      .join("+");
+    parts.push(`api (${schemas}) confirmed ${cov.api.candidatesConfirmed}/${cov.api.candidatesGenerated}`);
+  }
+  const dropped: string[] = [];
+  if (cov.duplicatesDropped) dropped.push(`${cov.duplicatesDropped} duplicate`);
+  if (cov.samplingDropped) dropped.push(`${cov.samplingDropped} sampled out of parametric families`);
+  if (cov.capDropped) dropped.push(`${cov.capDropped} cut by maxPages`);
+  if (dropped.length) parts.push(`dropped: ${dropped.join(", ")}`);
+  return parts.join(" · ");
 }
 
 /** Print the summary to stdout with the verdict emoji. */
