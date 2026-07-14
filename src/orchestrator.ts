@@ -180,6 +180,8 @@ export class Vigil {
       consoleAllowlist: this.config.checks.consoleErrorAllowlist,
       perPageVisitMs: this.config.budgets.perPageVisitMs,
       dataFidelity: this.config.checks.dataFidelity,
+      requiredSelectors: this.config.checks.requiredSelectors,
+      notFoundMarkers: this.config.checks.notFoundMarkers,
     };
 
     const t0 = Date.now();
@@ -281,8 +283,11 @@ function emptySignals(url: string): Signals {
       errorMarkersFound: [],
       spinnerStuck: false,
       screenshotLooksBlank: true,
+      missingSelectors: [],
+      notFoundMarkersFound: [],
     },
     contentFields: {},
+    apiMatchedCount: 0,
     flows: [],
     screenshotPath: "",
     timedOut: false,

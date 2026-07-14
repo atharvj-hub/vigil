@@ -65,6 +65,12 @@ export function evaluateRules(signals: Signals): RuleDecision {
   if (s.render.errorMarkersFound.length > 0) {
     warns.push(`error marker in page text (/${s.render.errorMarkersFound[0]}/)`);
   }
+  if (s.render.missingSelectors.length > 0) {
+    warns.push(`required selector(s) not found post-settle: ${s.render.missingSelectors.join(", ")}`);
+  }
+  if (s.render.notFoundMarkersFound.length > 0) {
+    warns.push(`possible soft-404: page text matched /${s.render.notFoundMarkersFound[0]}/ on a 200 response`);
+  }
   if (s.render.spinnerStuck) {
     warns.push("a loading spinner was still visible after settle");
   }

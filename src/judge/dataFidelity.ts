@@ -37,7 +37,19 @@ export function evaluateDataFidelity(
   const warnReasons: string[] = [];
   for (const field of config.fields) {
     const value = signals.contentFields[field];
-    if (value === undefined) continue; // no matching API response seen this visit — nothing to check
+    if (value === undefined) {
+      // A matching content-API response was seen this visit, but this specific
+      // field never appeared in it — most likely the backend renamed or
+      // dropped the field and the frontend (still reading the old name) is
+      // silently rendering nothing for it. If no matching response was seen
+      // at all, there's genuinely nothing to check — stay silent.
+      if (signals.apiMatchedCount > 0) {
+        warnReasons.push(
+          `configured field "${field}" was never found in ${signals.apiMatchedCount} matching API response(s) this visit — possible backend rename or removed field`
+        );
+      }
+      continue;
+    }
     const needle = normalize(String(value));
     if (needle.length === 0) continue;
     if (!sample.includes(needle)) {

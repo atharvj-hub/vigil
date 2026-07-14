@@ -19,8 +19,11 @@ const baseSignals = (over: Partial<Signals> = {}): Signals => ({
     errorMarkersFound: [],
     spinnerStuck: false,
     screenshotLooksBlank: false,
+    missingSelectors: [],
+    notFoundMarkersFound: [],
   },
   contentFields: {},
+  apiMatchedCount: 0,
   flows: [],
   screenshotPath: "",
   timedOut: false,
@@ -47,9 +50,17 @@ describe("evaluateDataFidelity", () => {
   });
 
   it("is a no-op when no matching API response was seen this visit (field never captured)", () => {
-    const signals = baseSignals({ contentFields: {} });
+    const signals = baseSignals({ contentFields: {}, apiMatchedCount: 0 });
     const result = evaluateDataFidelity(signals, dataFidelityConfig());
     expect(result.warnReasons).toEqual([]);
+  });
+
+  it("flags a possible backend rename when a matching API response was seen but the field never appeared in it", () => {
+    const signals = baseSignals({ contentFields: {}, apiMatchedCount: 1 });
+    const result = evaluateDataFidelity(signals, dataFidelityConfig());
+    expect(result.warnReasons).toHaveLength(1);
+    expect(result.warnReasons[0]).toContain("title");
+    expect(result.warnReasons[0]).toMatch(/rename|removed field/);
   });
 
   it("passes when the API value appears in the rendered text, case/whitespace-insensitive", () => {

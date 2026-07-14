@@ -60,6 +60,8 @@ export interface CollectOptions {
   consoleAllowlist: RegExp[];
   perPageVisitMs: number;
   dataFidelity: { apiPathPatterns: RegExp[]; fields: string[] };
+  requiredSelectors: string[];
+  notFoundMarkers: RegExp[];
 }
 
 /** Recursively pull named scalar fields out of a parsed JSON value (bounded depth). */
@@ -123,6 +125,7 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
   const requests: RequestSummary[] = [];
   const contentFields: Record<string, string | number> = {};
   const fidelityFieldNames = new Set(opts.dataFidelity.fields);
+  let apiMatchedCount = 0;
 
   const isExempt = (r: Request) => QUIET_EXEMPT.has(r.resourceType());
 
@@ -150,24 +153,30 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
     } catch {
       /* keep false */
     }
-    // Data-fidelity extraction: only for first-party, successful JSON responses
+    // Data-fidelity extraction: only for first-party, successful responses
     // matching a configured content-API pattern — never the whole body, only
-    // the specific named fields the user asked for.
+    // the specific named fields the user asked for. apiMatchedCount is tracked
+    // independent of whether any configured field was actually found in the
+    // body, so evaluateDataFidelity can tell "no matching API called this
+    // visit" (nothing to check) apart from "API called, but the field wasn't
+    // in it" (a possible backend rename — see judge/dataFidelity.ts).
     if (
-      fidelityFieldNames.size > 0 &&
       response &&
       firstParty &&
       status !== null &&
       status < 400 &&
       opts.dataFidelity.apiPathPatterns.some((re) => re.test(req.url()))
     ) {
-      try {
-        const body = await response.text();
-        if (body.length <= MAX_FIDELITY_BODY_BYTES) {
-          extractNamedFields(JSON.parse(body), fidelityFieldNames, contentFields);
+      apiMatchedCount++;
+      if (fidelityFieldNames.size > 0) {
+        try {
+          const body = await response.text();
+          if (body.length <= MAX_FIDELITY_BODY_BYTES) {
+            extractNamedFields(JSON.parse(body), fidelityFieldNames, contentFields);
+          }
+        } catch {
+          /* not JSON, or body unavailable — this is best-effort evidence, not a check itself */
         }
-      } catch {
-        /* not JSON, or body unavailable — this is best-effort evidence, not a check itself */
       }
     }
     requests.push({
@@ -236,12 +245,14 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
     errorMarkersFound: [],
     spinnerStuck: false,
     screenshotLooksBlank: true,
+    missingSelectors: [],
+    notFoundMarkersFound: [],
   };
   let finalUrl = url;
   if (navigationError === undefined && !crashed) {
     finalUrl = page.url();
     try {
-      const dom = await page.evaluate(() => {
+      const dom = await page.evaluate((selectors) => {
         const text = document.body ? document.body.innerText : "";
         const h1 = document.querySelector("h1");
         const spinnerSel = '[role="progressbar"],[aria-busy="true"],.spinner,.loading,.loader';
@@ -259,6 +270,13 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
           const r = (el as HTMLElement).getBoundingClientRect();
           return r.width > 4 && r.height > 4;
         }).length;
+        const missing = selectors.filter((sel) => {
+          try {
+            return document.querySelector(sel) === null;
+          } catch {
+            return false; // an invalid selector shouldn't itself be reported as "missing"
+          }
+        });
         return {
           text,
           title: document.title,
@@ -266,9 +284,11 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
           spinnerVisible,
           hasMedia: media,
           visibleEls,
+          missingSelectors: missing,
         };
-      });
+      }, opts.requiredSelectors);
       const found = allMarkers.filter((re) => re.test(dom.text)).map((re) => re.source);
+      const notFoundFound = opts.notFoundMarkers.filter((re) => re.test(dom.text)).map((re) => re.source);
       render = {
         textLength: dom.text.trim().length,
         title: dom.title,
@@ -277,6 +297,8 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
         errorMarkersFound: found,
         spinnerStuck: dom.spinnerVisible,
         screenshotLooksBlank: dom.text.trim().length < 40 && !dom.hasMedia && dom.visibleEls < 3,
+        missingSelectors: dom.missingSelectors,
+        notFoundMarkersFound: notFoundFound,
       };
     } catch {
       /* leave render defaults (blank) — evaluation failing is itself broken-ish */
@@ -310,6 +332,7 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
     crashed,
     render,
     contentFields,
+    apiMatchedCount,
     flows: [],
     screenshotPath: opts.screenshotPath,
     timedOut,

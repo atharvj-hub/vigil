@@ -20,8 +20,11 @@ function signals(over: Partial<Signals> = {}): Signals {
       errorMarkersFound: [],
       spinnerStuck: false,
       screenshotLooksBlank: false,
+      missingSelectors: [],
+      notFoundMarkersFound: [],
     },
     contentFields: {},
+    apiMatchedCount: 0,
     flows: [],
     screenshotPath: "",
     timedOut: false,
@@ -35,7 +38,17 @@ const doc = (status: number | null, extra: Partial<Signals["document"]> = {}): S
   settledMs: 100,
   ...extra,
 });
-const blank: Signals["render"] = { textLength: 0, title: "", h1: null, errorMarkersFound: [], spinnerStuck: false, screenshotLooksBlank: true };
+const blank: Signals["render"] = {
+  textLength: 0,
+  title: "",
+  h1: null,
+  textSample: "",
+  errorMarkersFound: [],
+  spinnerStuck: false,
+  screenshotLooksBlank: true,
+  missingSelectors: [],
+  notFoundMarkersFound: [],
+};
 
 describe("hard rules (fail)", () => {
   it("H1 — navigation failed (null status)", () => {
@@ -90,6 +103,16 @@ describe("deterministic warn tier (never fail)", () => {
     const d = evaluateRules(signals({ timedOut: true }));
     expect(d.status).toBe("warn");
     expect(d.hardRule).toBeUndefined();
+  });
+  it("missing required selector → warn (silent component that failed to mount)", () => {
+    const d = evaluateRules(signals({ render: { ...signals().render, missingSelectors: [".widget-related"] } }));
+    expect(d.status).toBe("warn");
+    expect(d.warnReasons[0]).toMatch(/\.widget-related/);
+  });
+  it("not-found marker on a 200 → warn (SPA soft-404)", () => {
+    const d = evaluateRules(signals({ render: { ...signals().render, notFoundMarkersFound: ["couldn't find that product"] } }));
+    expect(d.status).toBe("warn");
+    expect(d.warnReasons[0]).toMatch(/soft-404/);
   });
 });
 

@@ -74,6 +74,16 @@ const ChecksSchema = z
     latencyBudgetMs: z.number().int().min(0).default(5000),
     consoleErrorAllowlist: z.array(regex).default([]),
     errorMarkers: z.array(regex).default([]), // additions to the built-ins
+    // Opt-in, warn-only: assert these CSS selectors exist post-settle. Catches a
+    // component that silently fails to mount (no console error, no failed
+    // request, page settles clean) — a class of bug the hard rules and the
+    // default warn tier structurally cannot see, since nothing errors.
+    requiredSelectors: z.array(z.string()).default([]),
+    // Opt-in, warn-only: text patterns indicating a client-rendered "not found"
+    // state on a 200 response (the SPA catch-all soft-404 case). Never a hard
+    // rule — a legitimately-removed page correctly showing "not found" isn't
+    // broken, so this stays a visible, non-blocking signal, same as errorMarkers.
+    notFoundMarkers: z.array(regex).default([]),
     viewport: z
       .object({ width: z.number().int().default(1280), height: z.number().int().default(720) })
       .default({}),

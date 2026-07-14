@@ -91,8 +91,11 @@ export interface Signals {
     errorMarkersFound: string[];
     spinnerStuck: boolean;
     screenshotLooksBlank: boolean; // downsampled screenshot ≈ uniform color
+    missingSelectors: string[]; // checks.requiredSelectors entries not found post-settle — empty unless configured
+    notFoundMarkersFound: string[]; // checks.notFoundMarkers matches in rendered text — the "soft 404" signal, empty unless configured
   };
   contentFields: Record<string, string | number>; // fields pulled from a matching content-API response, per checks.dataFidelity config — empty unless configured
+  apiMatchedCount: number; // # of first-party responses this visit that matched checks.dataFidelity.apiPathPatterns — lets dataFidelity distinguish "nothing to check" from "field went missing"
   flows: FlowOutcome[]; // empty unless flows configured for this page
   screenshotPath: string;
   timedOut: boolean; // per-page visit cap hit
