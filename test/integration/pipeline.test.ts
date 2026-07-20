@@ -39,6 +39,7 @@ describe("full run against the fixture app", () => {
     result = await runSanity({
       url: base,
       discovery: { crawl: { depth: 2, maxPages: 50 } },
+      model: { judge: false }, // Phase 1 deterministic-pipeline test — no AI judge
       report: { dir: reportDir },
     });
   });
@@ -84,14 +85,14 @@ describe("full run against the fixture app", () => {
 
 describe("targeted single-page checks", () => {
   it("checkPage flags the 500 route", async () => {
-    const vigil = await Vigil.create({ report: { dir: reportDir } }, base);
+    const vigil = await Vigil.create({ report: { dir: reportDir }, model: { judge: false } }, base);
     const p = await vigil.checkPage("/boom");
     expect(p.status).toBe("fail");
     expect(p.hardRule).toBe("H2");
   });
 
   it("a healthy page whose load event hangs is a warn, never H1", async () => {
-    const vigil = await Vigil.create({ report: { dir: reportDir } }, base);
+    const vigil = await Vigil.create({ report: { dir: reportDir }, model: { judge: false } }, base);
     const p = await vigil.checkPage("/slowload");
     expect(p.status).toBe("warn");
     expect(p.hardRule).toBeUndefined();
@@ -103,6 +104,7 @@ describe("a clean subset is HEALTHY", () => {
     const r = await runSanity({
       url: base,
       discovery: { routes: ["/about", "/pricing"], sitemap: false, crawl: { enabled: false } },
+      model: { judge: false },
       report: { dir: reportDir },
     });
     expect(r.verdict).toBe("HEALTHY");

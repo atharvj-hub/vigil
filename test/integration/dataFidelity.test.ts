@@ -66,6 +66,7 @@ describe("data-fidelity check — full pipeline", () => {
       url: base,
       discovery: { routes: ["/movies/correct", "/movies/broken"], sitemap: false, crawl: { enabled: false } },
       checks: { dataFidelity: { enabled: true, apiPathPatterns: [/\/api\/movie/], fields: ["title"] } },
+      model: { judge: false }, // deterministic-pipeline test — no AI judge
       report: { dir: `vigil-report-test-${Date.now()}` },
     });
   }, 30_000);

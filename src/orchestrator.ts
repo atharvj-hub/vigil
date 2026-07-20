@@ -1,15 +1,20 @@
 // Orchestrator — owns a Run; sequences discovery → capture → judgment → report;
 // enforces budgets (documentation/02-architecture.md).
 //
-// Phase 1: no model. The "judgment" step is the deterministic rule engine
-// (judge/hardRules.ts). The AI judge and its cost accounting arrive in Phase 2.
+// Judgment is two-stage: the deterministic rule engine (judge/hardRules.ts)
+// has absolute first say; pages it doesn't hard-fail go to the AI judge
+// (judge/judge.ts) behind a reserve → commit/refund CostMeter. The judge
+// itself never sees budgets — reservation, commit, and every fallback
+// (`budget`, `error`) are decided here.
 
 import { chromium, firefox, webkit, type Browser } from "playwright";
 import { mkdir } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
+import type { LanguageModel } from "ai";
 import type {
   DiscoveredPage,
+  JudgeVerdict,
   PageResult,
   PageSet,
   RunResult,
@@ -22,11 +27,29 @@ import { discover } from "./discovery/index.js";
 import { collect } from "./collector.js";
 import { evaluateRules, type RuleDecision } from "./judge/hardRules.js";
 import { evaluateDataFidelity } from "./judge/dataFidelity.js";
+import { CostMeter } from "./judge/costMeter.js";
+import { resolveJudgeModel, type ResolvedModel } from "./judge/providers.js";
+import { estimateJudgeCostUsd } from "./judge/pricing.js";
+import { judgePage, ScreenshotUnreadableError } from "./judge/judge.js";
+import { ModelUnavailableError, MalformedVerdictError } from "./judge/modelGateway.js";
+import { applyPolicy } from "./judge/verdictPolicy.js";
 import { writeReport } from "./reporter/index.js";
 import { TypedEmitter } from "./util/emitter.js";
 import { slugForUrl, uniqueSlug } from "./util/slug.js";
 
 const ENGINES = { chromium, firefox, webkit };
+
+/** The per-run judge machinery. null = judge explicitly disabled (hard rules only). */
+interface JudgeRuntime {
+  resolved: ResolvedModel;
+  meter: CostMeter;
+}
+
+/** What one attempted judgment produced — the orchestrator's decision input. */
+type JudgeAttempt =
+  | { kind: "verdict"; verdict: JudgeVerdict; usd: number; ms: number }
+  | { kind: "budget"; usd: 0; ms: 0 }
+  | { kind: "error"; message: string; usd: number; ms: number };
 
 export class Vigil {
   readonly config: ResolvedConfig;
@@ -54,6 +77,19 @@ export class Vigil {
     }
   }
 
+  /**
+   * Resolve the per-run judge machinery. `model.judge === false` disables the
+   * judge entirely (hard rules only — the CLI's --no-judge). Otherwise a model
+   * must be resolvable (explicit config or env key) — its absence is an
+   * operational error, not a silent downgrade in scrutiny.
+   */
+  private async resolveJudgeRuntime(): Promise<JudgeRuntime | null> {
+    const judgeCfg = (this.config.model as { judge?: LanguageModel | false } | undefined)?.judge;
+    if (judgeCfg === false) return null;
+    const resolved = await resolveJudgeModel(judgeCfg);
+    return { resolved, meter: new CostMeter(this.config.budgets.maxModelCostUsd) };
+  }
+
   /** Full pipeline: discover, visit+capture in parallel, decide, report. */
   async run(): Promise<RunResult> {
     const startedAt = new Date();
@@ -62,6 +98,7 @@ export class Vigil {
     const pagesDir = join(artifactsDir, "pages");
     await mkdir(pagesDir, { recursive: true });
 
+    const judge = await this.resolveJudgeRuntime();
     const browser = await this.launch();
     const budgetsExhausted = new Set<string>();
     let pages: PageResult[] = [];
@@ -89,7 +126,7 @@ export class Vigil {
       const slugOf = (url: string) => uniqueSlug(slugForUrl(url), slugs);
       const deadline = startedAt.getTime() + this.config.budgets.maxRunMinutes * 60_000;
 
-      pages = await this.visitAll(browser, pageSet.pages, pagesDir, slugOf, deadline, budgetsExhausted);
+      pages = await this.visitAll(browser, pageSet.pages, pagesDir, slugOf, deadline, budgetsExhausted, judge);
     } finally {
       await browser.close();
     }
@@ -104,7 +141,7 @@ export class Vigil {
       startedAt: startedAt.toISOString(),
       durationMs,
       counts: countStatuses(pages),
-      cost: { modelCalls: 0, modelUsd: 0 }, // no model in Phase 1
+      cost: judge ? { modelCalls: judge.meter.calls, modelUsd: judge.meter.spent } : { modelCalls: 0, modelUsd: 0 },
       budgetsExhausted: [...budgetsExhausted],
       pages,
       coverage: pageSet.coverage,
@@ -120,11 +157,12 @@ export class Vigil {
   async checkPage(urlOrPath: string): Promise<PageResult> {
     const origin = new URL(this.config.url!).origin;
     const url = new URL(urlOrPath, origin).toString();
+    const judge = await this.resolveJudgeRuntime();
     const browser = await this.launch();
     const dir = join(this.config.report.dir, "_check");
     await mkdir(dir, { recursive: true });
     try {
-      return await this.visitOne(browser, { url, source: "config" }, dir, "check");
+      return await this.visitOne(browser, { url, source: "config" }, dir, "check", new Set(), judge);
     } finally {
       await browser.close();
     }
@@ -138,7 +176,8 @@ export class Vigil {
     pagesDir: string,
     slugOf: (url: string) => string,
     deadline: number,
-    budgetsExhausted: Set<string>
+    budgetsExhausted: Set<string>,
+    judge: JudgeRuntime | null
   ): Promise<PageResult[]> {
     const results: PageResult[] = new Array(discovered.length);
     let next = 0;
@@ -156,7 +195,7 @@ export class Vigil {
           continue;
         }
         this.events.emit("page:start", { url: page.url });
-        results[i] = await this.visitOne(browser, page, pagesDir, slugOf(page.url));
+        results[i] = await this.visitOne(browser, page, pagesDir, slugOf(page.url), budgetsExhausted, judge);
         this.events.emit("page:complete", results[i]!);
       }
     };
@@ -165,11 +204,56 @@ export class Vigil {
     return results;
   }
 
+  /**
+   * One judgment attempt for one capture: reserve → judgePage → commit.
+   * All budget/failure bookkeeping lives here, so `judgePage` stays budget-blind.
+   */
+  private async judgeOnce(
+    judge: JudgeRuntime,
+    signals: Signals,
+    fidelityWarnings: string[] | undefined,
+    budgetsExhausted: Set<string>
+  ): Promise<JudgeAttempt> {
+    const ticket = judge.meter.reserve(estimateJudgeCostUsd(judge.resolved.modelId));
+    if (ticket === null) {
+      if (!budgetsExhausted.has("maxModelCostUsd")) {
+        this.events.emit("run:budget", { budget: "maxModelCostUsd", remaining: 0 });
+        budgetsExhausted.add("maxModelCostUsd");
+      }
+      return { kind: "budget", usd: 0, ms: 0 };
+    }
+
+    const t0 = Date.now();
+    try {
+      const result = await judgePage(signals, {
+        resolved: judge.resolved,
+        origin: new URL(this.config.url!).origin,
+        fidelityWarnings,
+      });
+      judge.meter.commit(ticket, result.usd);
+      return { kind: "verdict", verdict: result.verdict, usd: result.usd, ms: result.ms };
+    } catch (err) {
+      if (err instanceof ModelUnavailableError || err instanceof MalformedVerdictError) {
+        // Failed attempts still billed tokens — commit real spend, never hide it.
+        judge.meter.commit(ticket, err.usdSoFar);
+        return { kind: "error", message: err.message, usd: err.usdSoFar, ms: Date.now() - t0 };
+      }
+      if (err instanceof ScreenshotUnreadableError) {
+        judge.meter.refund(ticket); // the provider was never reached
+        return { kind: "error", message: err.message, usd: 0, ms: Date.now() - t0 };
+      }
+      judge.meter.refund(ticket);
+      throw err; // unknown — a genuine bug, not a degradable model failure
+    }
+  }
+
   private async visitOne(
     browser: Browser,
     page: DiscoveredPage,
     pagesDir: string,
-    slug: string
+    slug: string,
+    budgetsExhausted: Set<string>,
+    judge: JudgeRuntime | null
   ): Promise<PageResult> {
     const origin = new URL(this.config.url!).origin;
     const opts = {
@@ -200,9 +284,16 @@ export class Vigil {
     let retried = false;
     let flaky = false;
     let retrySignals: Signals | undefined;
+    let decidedBy: PageResult["decidedBy"] = "hard-rule";
+    let judgeVerdict: JudgeVerdict | undefined;
+    let unjudged = false;
+    let judgeError: string | undefined;
+    let judgeUsd = 0;
+    let judgeMs = 0;
 
-    // Retry protocol: any candidate fail is retried once with a fresh context.
     if (decision.status === "fail") {
+      // Hard-fail path — unchanged from Phase 1. Hard rules have absolute
+      // authority; the model never second-guesses them.
       retried = true;
       retrySignals = await collect(browser, page.url, {
         ...opts,
@@ -218,11 +309,108 @@ export class Vigil {
         };
       }
       // Fail twice → the failure stands; both captures are kept.
+    } else if (judge !== null) {
+      // Judge stage — only for pages the deterministic layer didn't hard-fail.
+      const attempt = await this.judgeOnce(judge, signals, fidelityWarnings, budgetsExhausted);
+      judgeUsd += attempt.usd;
+      judgeMs += attempt.ms;
+
+      if (attempt.kind === "budget") {
+        decidedBy = "budget";
+        unjudged = true;
+        decision = unjudgedWarn(decision, "unjudged — model budget exhausted");
+      } else if (attempt.kind === "error") {
+        decidedBy = "error";
+        unjudged = true;
+        judgeError = attempt.message;
+        decision = unjudgedWarn(decision, "unjudged — judge error");
+      } else {
+        decidedBy = "judge";
+        judgeVerdict = attempt.verdict;
+        const policy = applyPolicy(attempt.verdict);
+
+        if (policy.kind === "warn") {
+          decision = { status: "warn", headline: policy.headline, warnReasons: decision.warnReasons };
+        } else if (policy.kind === "candidate-fail") {
+          // Retry protocol, judged flavor: fresh context, fresh capture, and a
+          // fresh judgment of the new capture (doc 05).
+          retried = true;
+          retrySignals = await collect(browser, page.url, {
+            ...opts,
+            screenshotPath: join(pagesDir, `${slug}.retry.png`),
+          });
+          const retryRules = evaluateRules(retrySignals);
+          if (retryRules.status === "fail") {
+            // The retry hard-failed on its own — the page is definitely broken.
+            decision = { status: "fail", headline: policy.headline, warnReasons: [] };
+          } else {
+            const re = await this.judgeOnce(judge, retrySignals, fidelityWarnings, budgetsExhausted);
+            judgeUsd += re.usd;
+            judgeMs += re.ms;
+            if (re.kind === "verdict") {
+              judgeVerdict = re.verdict; // the surviving verdict ships
+              const rePolicy = applyPolicy(re.verdict);
+              if (rePolicy.kind === "candidate-fail") {
+                decision = { status: "fail", headline: rePolicy.headline, warnReasons: [] }; // confirmed
+              } else {
+                flaky = true;
+                decision = {
+                  status: "warn",
+                  headline: `passed on retry (flaky): ${policy.headline}`,
+                  warnReasons: [`flaky — first judgment failed, retry recovered`],
+                };
+              }
+            } else {
+              // The confirming judgment couldn't run (budget/outage). A fail
+              // that can't be confirmed is never recorded red — zero false reds.
+              const why = re.kind === "budget" ? "model budget exhausted" : "judge error";
+              decision = {
+                status: "warn",
+                headline: `judged fail, but retry went unjudged (${why}): ${policy.headline}`,
+                warnReasons: decision.warnReasons,
+              };
+              if (re.kind === "error") judgeError = re.message;
+            }
+          }
+        } else if (decision.status !== "pass") {
+          // Judge pass over a deterministic warn: the judge saw the warn-tier
+          // evidence in the digest and cleared it. Status follows the judge
+          // (doc 05 firewall); the deterministic concern stays in the headline.
+          decision = {
+            status: "pass",
+            headline: `judged healthy (deterministic warns cleared: ${decision.headline})`,
+            warnReasons: [],
+          };
+        }
+      }
     }
 
     const visitMs = Date.now() - t0;
-    return toPageResult(page, decision, signals, retrySignals, { retried, flaky, visitMs, fidelityWarnings });
+    return toPageResult(page, decision, signals, retrySignals, {
+      retried,
+      flaky,
+      visitMs,
+      fidelityWarnings,
+      decidedBy,
+      judge: judgeVerdict,
+      unjudged,
+      judgeError,
+      judgeUsd,
+      judgeMs: judge !== null && decidedBy === "judge" ? judgeMs : undefined,
+    });
   }
+}
+
+/**
+ * An unjudged page is yellow, never green (doc 02: budget exhaustion is always
+ * visible) — a deterministic pass downgrades to warn with the reason attached.
+ */
+function unjudgedWarn(decision: RuleDecision, note: string): RuleDecision {
+  return {
+    status: "warn",
+    headline: `${note}: ${decision.headline}`,
+    warnReasons: [...decision.warnReasons, note],
+  };
 }
 
 // ── pure helpers ───────────────────────────────────────────────────────────
@@ -232,22 +420,36 @@ function toPageResult(
   decision: RuleDecision,
   signals: Signals,
   retrySignals: Signals | undefined,
-  meta: { retried: boolean; flaky: boolean; visitMs: number; fidelityWarnings?: string[] }
+  meta: {
+    retried: boolean;
+    flaky: boolean;
+    visitMs: number;
+    fidelityWarnings?: string[];
+    decidedBy: PageResult["decidedBy"];
+    judge?: JudgeVerdict;
+    unjudged?: boolean;
+    judgeError?: string;
+    judgeUsd: number;
+    judgeMs?: number;
+  }
 ): PageResult {
   return {
     url: page.url,
     source: page.source,
     status: decision.status,
     headline: decision.headline,
-    decidedBy: "hard-rule", // Phase 1: the deterministic rule engine decides every page
+    decidedBy: meta.decidedBy,
     hardRule: decision.hardRule,
+    judge: meta.judge,
+    unjudged: meta.unjudged || undefined,
+    judgeError: meta.judgeError,
     fidelityWarnings: meta.fidelityWarnings,
     retried: meta.retried,
     flaky: meta.flaky,
     signals,
     retrySignals,
-    timings: { visitMs: meta.visitMs },
-    cost: { judgeUsd: 0, flowsUsd: 0 },
+    timings: { visitMs: meta.visitMs, judgeMs: meta.judgeMs },
+    cost: { judgeUsd: meta.judgeUsd, flowsUsd: 0 },
   };
 }
 

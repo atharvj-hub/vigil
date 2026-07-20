@@ -97,10 +97,13 @@ export interface PageResult {
   source: DiscoverySource;
   status: PageStatus;
   headline: string;                              // the one line shown in summaries
-  decidedBy: "hard-rule" | "judge" | "budget" | "skipped";
+  decidedBy: "hard-rule" | "judge" | "budget" | "error" | "skipped";
+                                                 // budget = spend cap denied the call;
+                                                 // error  = call attempted but failed (outage/malformed)
   hardRule?: "H1" | "H2" | "H3" | "H4" | "H5";
   judge?: JudgeVerdict;                          // absent for hard rules / unjudged
   unjudged?: boolean;                            // model budget/outage: hard rules only ran
+  judgeError?: string;                           // short reason when decidedBy === "error"
   retried: boolean;
   flaky: boolean;                                // failed then passed on retry
   signals: Signals;                              // first capture

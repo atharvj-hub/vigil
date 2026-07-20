@@ -98,6 +98,11 @@ Orchestrator logs.
 | `maxModelCostUsd` | 2.00 | remaining pages judged by hard rules only, reported `unjudged` (yellow) |
 | per-page visit cap | 30s | page reported with whatever was captured; judge sees the timeout as a signal |
 
+`maxModelCostUsd` is enforced *pre-call* by a reserve → commit/refund cost meter internal to the
+Orchestrator: a conservative per-call estimate (derived from the resolved model's price table) is
+reserved before any model call, the actual cost is committed after, and a denied reservation means
+the call never happens. The Judge itself never sees budgets — its API takes evidence, not money.
+
 A `skipped`/`unjudged` page can never let a run be `HEALTHY` — the verdict is `DEGRADED` at
 best, so budget exhaustion is always visible, never silent.
 

@@ -29,12 +29,18 @@
     "fixture": "node test/fixtures/app.mjs"
   },
   "dependencies": {
+    "ai": "^7.0.26",
     "commander": "^12.1.0",
     "fast-xml-parser": "^4.5.0",
-    "zod": "^3.23.8"
+    "zod": "^3.25.76"
   },
   "peerDependencies": {
     "playwright": "^1.47.0"
+  },
+  "optionalDependencies": {
+    "@ai-sdk/anthropic": "^4.0.14",
+    "@ai-sdk/google": "^4.0.14",
+    "@ai-sdk/openai": "^4.0.13"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

@@ -45,6 +45,7 @@ src/judge/
   judge.ts            NEW — orchestration of one page's judgment (digest→call→map)
   verdictPolicy.ts    NEW — JudgeVerdict + confidence → PageStatus (the firewall table)
   costMeter.ts        NEW — shared, concurrency-safe budget reserve/commit
+  pricing.ts          NEW — per-model price table, reservation estimate + actual-cost math
 ```
 
 Everything the model touches lives here; the orchestrator only imports `judge.ts`
@@ -160,8 +161,9 @@ One `judgePage(signals, ctx)` entry. Responsibilities:
 1. Resolve model (via `providers.ts`), assemble prompt (`prompt.ts`).
 2. `generateObject({ model, schema: JudgeVerdictSchema, messages })`.
 3. **Cost accounting** from returned `usage` (input/output tokens) × the model's
-   price table (a small per-model `{inUsd,outUsd}` map; unknown model → conservative
-   estimate + a `costEstimated` flag so we never *under*-count against the budget).
+   price table (`pricing.ts` — the same table the reservation estimate uses; unknown
+   model → conservative fallback + an `estimated` flag so we never *under*-count
+   against the budget).
 4. **Transient-retry**: one retry on network/5xx/timeout from the provider (distinct
    from vigil's page-level retry protocol) with short backoff; on repeated failure →
    throw a typed `ModelUnavailable` → caller degrades to `unjudged`.
@@ -186,9 +188,12 @@ Design:
   - `commit(ticket, actualUsd)`: moves reserved→spent with the real cost.
   - `refund(ticket)`: releases the reservation (used when the call degrades to
     `unjudged` before spending).
-- `estUsd` = a fixed per-page upper estimate (doc 05 worked figure ~$0.004, use a
-  safety ceiling e.g. $0.006 = the exit-criterion cap) so reservations are
-  conservative — we may leave a little budget unused, never overspend.
+- `estUsd` = `estimateJudgeCostUsd(modelId)` (from `pricing.ts`): worked per-page token
+  figures (doc 05: ~2,600 in / ~250 out) × the **resolved model's** price table entry
+  × a safety factor. NOT a hardcoded dollar figure — if someone swaps the judge model,
+  prompt size, or provider, the reservation tracks the price table instead of silently
+  under-reserving. Unknown model id → conservative fallback prices (never under-reserve).
+  The same price table feeds actual-cost accounting in the gateway (§8) — one source of truth.
 - On `reserve` denial → page recorded `unjudged` (hard-rule decision stands),
   `budgetsExhausted` gains `maxModelCostUsd`, `run:budget` event emitted.
 - `RunResult.cost.modelUsd = meter.spent`, `modelCalls = committed count`. Asserted
@@ -230,7 +235,10 @@ collect → evaluateRules
           no  → unjudged: keep deterministic warn-tier decision, decidedBy "budget"
           yes → judgePage()
                   ok        → applyPolicy → status + judge verdict, decidedBy "judge"
-                  outage    → refund + unjudged (decidedBy "budget"), warn-tier stands
+                  failure   → refund + unjudged, decidedBy "error" + judgeError string
+                              (provider outage / timeout / malformed verdict — distinct
+                               from "budget" so an OpenAI outage never masquerades as
+                               budget exhaustion in the report)
 ```
 Then the **existing retry protocol** is generalized: a candidate fail (hard *or*
 judged) is retried once with a fresh context — and on the judged path the retry
@@ -239,7 +247,8 @@ retry → `warn (flaky)`; fail twice → the fail stands with both captures + bo
 verdicts shipped.
 
 Bookkeeping wired through `toPageResult`:
-- `decidedBy`: `"hard-rule" | "judge" | "budget"` (budget = unjudged).
+- `decidedBy`: `"hard-rule" | "judge" | "budget" | "error"` (budget = reservation denied;
+  error = call attempted but failed — both are `unjudged`, distinguishable in the report).
 - `judge`: the verdict (and `retryJudge` conceptually — stored via `retrySignals`
   detail; keep to schema by attaching the surviving verdict to `judge`).
 - `unjudged: true` when budget/outage.

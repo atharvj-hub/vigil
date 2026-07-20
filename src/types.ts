@@ -124,10 +124,15 @@ export interface PageResult {
   source: DiscoverySource;
   status: PageStatus;
   headline: string; // the one line shown in summaries
-  decidedBy: "hard-rule" | "judge" | "budget" | "skipped";
+  // budget = model budget exhausted before this page; error = the judge was
+  // attempted but failed operationally (provider outage, timeout, malformed
+  // response). Both fall back to the deterministic warn-tier decision, but a
+  // report reader can tell "we chose not to spend" from "the model call broke".
+  decidedBy: "hard-rule" | "judge" | "budget" | "error" | "skipped";
   hardRule?: HardRule;
   judge?: JudgeVerdict; // absent for hard rules / unjudged
   unjudged?: boolean; // model budget/outage — hard rules only ran
+  judgeError?: string; // short reason when decidedBy === "error" (e.g. "provider unavailable", "malformed verdict")
   retried: boolean;
   flaky: boolean; // failed then passed on retry
   fidelityWarnings?: string[]; // data-fidelity mismatches (checks.dataFidelity) — separate from hardRule warns so they're always visible in the report
