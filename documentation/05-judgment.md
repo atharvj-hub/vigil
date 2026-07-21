@@ -61,20 +61,28 @@ concrete evidence for every reason; if the evidence is ambiguous, prefer `warn` 
 |---|---|
 | `pass` | pass |
 | `warn` (any confidence) | warn — yellow, non-gating by default |
-| `fail`, confidence ≥ 0.8 | candidate fail → retry protocol |
+| `fail`, confidence ≥ 0.8 | confirmed fail — no re-judge (cost) |
 | `fail`, confidence < 0.8 | warn, annotated `low-confidence` — a human look is requested, the pipeline is not blocked |
 
-## The retry protocol (replacing flake machinery)
+## The retry protocol (hard rules only; replacing flake machinery)
 
-Any candidate `fail` — hard or judged — is retried **once**: brand-new browser context, fresh
-visit, fresh capture, fresh judgment.
+A hard `fail` (Stage 1) is retried **once**: brand-new browser context, fresh visit, fresh
+capture, fresh hard-rule evaluation.
 
 - **Pass on retry** → recorded `warn` with reason `flaky` (yellow). One-off blips don't block
   deploys, but they're never silent either.
 - **Fail twice** → the failure stands. Both captures ship in the report.
 
-This is the entire flake system. No strikes, no quarantine, no signature lists — those exist to
-manage *persistently stored* flaky tests, and vigil has none.
+This is the entire flake system for deterministic failures. No strikes, no quarantine, no
+signature lists — those exist to manage *persistently stored* flaky tests, and vigil has none.
+
+A judged `fail` at confidence ≥ 0.8 is **not** retried — a re-judge would double the model spend
+on every page the judge flags, and per-run cost is a first-class constraint (doc 09). The
+confidence gate is the only firewall for judged fails: it ships as a confirmed fail on the first
+judgment. This trades away the flake-recovery safety net for judged fails specifically; if
+dogfooding shows the false-positive rate is too high without it, a cheaper reconfirmation (e.g.
+re-running only the hard rules on a fresh capture, no second model call) is the fallback to
+revisit before reinstating a full re-judge (roadmap open question).
 
 ## The environmental override
 
@@ -131,7 +139,8 @@ rendered text = 0. H4 fires. Hard fail, retried, fails again → `fail`, evidenc
 
 **B. Payment API degraded.** `/checkout` renders, but signals show `POST /api/payment/intent`
 → 500 (first-party) and the screenshot shows an error toast. Judge: `fail`, confidence 0.97,
-reasons cite the 500 and the visible toast. Retry fails identically → BROKEN with both captures.
+reasons cite the 500 and the visible toast. Confidence clears the gate → BROKEN immediately, no
+re-judge call.
 
 **C. Marketing reworded the homepage.** No stored baseline exists to disagree with. Signals
 clean, screenshot looks like a normal homepage → `pass`. The entire class of "the app changed,

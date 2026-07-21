@@ -332,46 +332,12 @@ export class Vigil {
         if (policy.kind === "warn") {
           decision = { status: "warn", headline: policy.headline, warnReasons: decision.warnReasons };
         } else if (policy.kind === "candidate-fail") {
-          // Retry protocol, judged flavor: fresh context, fresh capture, and a
-          // fresh judgment of the new capture (doc 05).
-          retried = true;
-          retrySignals = await collect(browser, page.url, {
-            ...opts,
-            screenshotPath: join(pagesDir, `${slug}.retry.png`),
-          });
-          const retryRules = evaluateRules(retrySignals);
-          if (retryRules.status === "fail") {
-            // The retry hard-failed on its own — the page is definitely broken.
-            decision = { status: "fail", headline: policy.headline, warnReasons: [] };
-          } else {
-            const re = await this.judgeOnce(judge, retrySignals, fidelityWarnings, budgetsExhausted);
-            judgeUsd += re.usd;
-            judgeMs += re.ms;
-            if (re.kind === "verdict") {
-              judgeVerdict = re.verdict; // the surviving verdict ships
-              const rePolicy = applyPolicy(re.verdict);
-              if (rePolicy.kind === "candidate-fail") {
-                decision = { status: "fail", headline: rePolicy.headline, warnReasons: [] }; // confirmed
-              } else {
-                flaky = true;
-                decision = {
-                  status: "warn",
-                  headline: `passed on retry (flaky): ${policy.headline}`,
-                  warnReasons: [`flaky — first judgment failed, retry recovered`],
-                };
-              }
-            } else {
-              // The confirming judgment couldn't run (budget/outage). A fail
-              // that can't be confirmed is never recorded red — zero false reds.
-              const why = re.kind === "budget" ? "model budget exhausted" : "judge error";
-              decision = {
-                status: "warn",
-                headline: `judged fail, but retry went unjudged (${why}): ${policy.headline}`,
-                warnReasons: decision.warnReasons,
-              };
-              if (re.kind === "error") judgeError = re.message;
-            }
-          }
+          // Retry/re-judge disabled for cost: a second judge call would double
+          // API billing per candidate fail. The confidence gate (verdictPolicy)
+          // is the only firewall now — a candidate-fail ships as a confirmed
+          // fail on the first judgment. Revisit if false-positive rate proves
+          // too high in practice (roadmap open question).
+          decision = { status: "fail", headline: policy.headline, warnReasons: [] };
         } else if (decision.status !== "pass") {
           // Judge pass over a deterministic warn: the judge saw the warn-tier
           // evidence in the digest and cleared it. Status follows the judge

@@ -17,13 +17,16 @@ Each phase ends with something a real project can run in its pipeline. The whole
 
 Phase 1 is the trust foundation and already a shippable "smart smoke test".
 
-### Phase 2 — The judge · ~1–2 weeks
+### Phase 2 — The judge (DONE) · ~1–2 weeks
 **Goal: the AI verdict layer, end to end.**
 - ModelGateway (AI SDK), judge prompt + zod schema, confidence policy, cost metering,
   `maxModelCostUsd` enforcement, `unjudged` degradation, provider auto-detection from env
-- **Exit criterion:** on the dogfood apps with seeded breakages (error toast with 200s,
+- Reporter surfaces judge confidence, reasons, decidedBy badges, and unjudged failure modes; CLI `--no-judge`
+- **Exit criterion:** on dogfood apps with seeded breakages (error toast with 200s,
   half-rendered page, dead widget), judge catches ≥ 90% with zero false BROKENs across 100
   clean runs; per-page judge cost ≤ $0.006.
+
+Phase 2 implements the full AI verdict layer behind a single orchestrator seam, keeping hard rules authoritative while bringing structured multimodal AI judgment to every clean-rendering page.
 
 ### Phase 3 — Auth & flows · ~1–2 weeks
 **Goal: apps behind login, and NL interaction checks.**
@@ -41,7 +44,7 @@ Phase 1 is the trust foundation and already a shippable "smart smoke test".
 
 | Risk | Why it's real | Mitigation (designed in) |
 |---|---|---|
-| **False positives kill trust** | #1 reason such tools get abandoned | Hard evidence for hard fails; confidence gate + fresh-context retry for judged fails; `warn` tier absorbs ambiguity; INCONCLUSIVE for environmental failure; every red cites checkable evidence (doc 05) |
+| **False positives kill trust** | #1 reason such tools get abandoned | Hard evidence for hard fails (fresh-context retry, free); confidence gate (0.8) for judged fails, no re-judge (cost); `warn` tier absorbs ambiguity; INCONCLUSIVE for environmental failure; every red cites checkable evidence (doc 05) |
 | **Judge misses subtle breakage** | A vision model can gloss over a dead-but-pretty page | The signals digest (console/network) travels with the screenshot — most "invisible" breakage is loud in signals; flows cover load-bearing interactions; non-goal honesty: deep correctness is regression testing's job |
 | **Model cost/latency surprises** | per-run model spend is new to CI | Hard `maxModelCostUsd`; cheap-model default; costs printed on every run; hard rules keep working when budget exhausts (`unjudged`, yellow) |
 | **Provider drift / lock-in** | any single-vendor coupling contradicts the agnostic promise | All model access through the AI SDK `LanguageModel` seam; Stagehand is itself model-agnostic; judge prompt uses no provider-specific features beyond structured output |

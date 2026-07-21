@@ -111,17 +111,17 @@ describe("judge stage — full pipeline with a mock model", () => {
     expect(r.cost.modelUsd).toBeLessThanOrEqual(2.0); // the default cap, invariant 5
   }, 60_000);
 
-  it("a confident judged fail is confirmed by re-judge → BROKEN with both verdict runs", async () => {
+  it("a confident judged fail is a confirmed fail on the first judgment — no re-judge call", async () => {
     const model = mockJudge(forPath(() => fail(0.9)));
     const r = await run(["/about"], model);
     const p = byPath(r, "/about")!;
     expect(r.verdict).toBe("BROKEN");
     expect(p.status).toBe("fail");
     expect(p.decidedBy).toBe("judge");
-    expect(p.retried).toBe(true);
-    expect(p.retrySignals).toBeDefined();
+    expect(p.retried).toBe(false);
+    expect(p.retrySignals).toBeUndefined();
     expect(p.judge?.status).toBe("fail");
-    expect(r.cost.modelCalls).toBe(3); // "/" + first judgment + confirming re-judge
+    expect(r.cost.modelCalls).toBe(2); // "/" + the one /about judgment — no confirming re-judge
   }, 60_000);
 
   it("a low-confidence fail is a warn, never retried, never red", async () => {
@@ -133,17 +133,6 @@ describe("judge stage — full pipeline with a mock model", () => {
     expect(p.retried).toBe(false);
     expect(p.headline).toContain("low confidence");
     expect(r.cost.modelCalls).toBe(2); // "/" + one judgment, no retry
-  }, 60_000);
-
-  it("fail on first judgment, pass on re-judge → warn (flaky)", async () => {
-    const model = mockJudge(forPath((call) => (call === 1 ? fail(0.9) : pass())));
-    const r = await run(["/about"], model);
-    const p = byPath(r, "/about")!;
-    expect(p.status).toBe("warn");
-    expect(p.flaky).toBe(true);
-    expect(p.retried).toBe(true);
-    expect(p.headline).toContain("flaky");
-    expect(r.verdict).toBe("DEGRADED");
   }, 60_000);
 
   it("budget cap 0 → every page unjudged (decidedBy budget), run DEGRADED, zero model calls", async () => {
@@ -170,21 +159,6 @@ describe("judge stage — full pipeline with a mock model", () => {
     expect(p.decidedBy).toBe("error");
     expect(p.unjudged).toBe(true);
     expect(p.judgeError).toContain("unavailable");
-  }, 60_000);
-
-  it("budget runs out between first judgment and re-judge → warn, not red (zero false reds)", async () => {
-    // concurrency 1 → deterministic order: "/" (pass, ~$0.0075 committed),
-    // then "/about" (fail 0.9, ~$0.0075 committed). The confirming re-judge
-    // needs spent ($0.015) + reserve (~$0.0173) ≤ cap — denied at $0.03.
-    const model = mockJudge(forPath(() => fail(0.9)));
-    const r = await run(["/about"], model, { budgets: { maxModelCostUsd: 0.03, concurrency: 1 } });
-    const p = byPath(r, "/about")!;
-    expect(p.status).toBe("warn");
-    expect(p.retried).toBe(true);
-    expect(p.headline).toContain("retry went unjudged");
-    expect(r.budgetsExhausted).toContain("maxModelCostUsd");
-    expect(r.verdict).toBe("DEGRADED");
-    expect(r.cost.modelCalls).toBe(2); // "/" + the first /about judgment
   }, 60_000);
 
   it("hard rules keep absolute first say — a hard-failed page never reaches the judge", async () => {

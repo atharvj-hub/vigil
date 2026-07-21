@@ -55,4 +55,5 @@ tmp/
 
 # vigil (generated artifacts + cached auth state)
 vigil-report/
+vigil-report-test-*/
 .vigil-auth.json

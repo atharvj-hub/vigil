@@ -68,9 +68,11 @@ Orchestrator logs.
    as evidence — no model call, no ambiguity.
 7. Every other page gets **one judge call**: screenshot + compact signals digest → structured
    verdict `{status, reasons[], confidence}` (schema-enforced via zod; doc 05).
-8. Any `fail` (hard or judged) triggers **one retry**: fresh context, revisit, recapture,
-   re-judge. Pass on retry → recorded as `warn` with reason `flaky`. Fail twice → the failure
-   stands, and both captures are kept as evidence.
+8. A hard `fail` triggers **one retry**: fresh context, revisit, recapture, fresh hard-rule
+   evaluation. Pass on retry → recorded as `warn` with reason `flaky`. Fail twice → the failure
+   stands, and both captures are kept as evidence. A judged `fail` at confidence ≥ 0.8 is *not*
+   retried — a re-judge would double model spend per flagged page (doc 05) — and ships as a
+   confirmed fail on the first judgment.
 
 ### Phase 4 — Report
 9. Page verdicts roll up into the run verdict: any confirmed `fail` → `BROKEN`; else any

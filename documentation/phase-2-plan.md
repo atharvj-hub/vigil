@@ -1,5 +1,13 @@
 # Phase 2 Implementation Plan — The Judge
 
+> **Post-implementation amendment:** the re-judge half of the retry protocol described
+> below (§10, §11, §17) was removed after implementation to control per-run API cost —
+> a re-judge doubles the model bill on every page the judge flags as a fail. A judged
+> `fail` at confidence ≥ 0.8 now ships as a confirmed fail on the first judgment, no
+> retry. The hard-rule retry (free, no model call) is unchanged. See
+> [05-judgment.md](05-judgment.md) and [02-architecture.md](02-architecture.md) for the
+> current behavior; this plan document is kept as-authored for history.
+
 > Goal (roadmap §Phase 2): the AI verdict layer, end to end. ModelGateway (AI SDK),
 > judge prompt + zod schema, confidence policy, cost metering, `maxModelCostUsd`
 > enforcement, `unjudged` degradation, provider auto-detection from env.

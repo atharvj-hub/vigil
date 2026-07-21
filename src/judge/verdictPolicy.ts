@@ -4,11 +4,11 @@
 //   |-------------------------|-----------------------------------|
 //   | pass                    | pass                              |
 //   | warn (any confidence)   | warn — yellow, non-gating         |
-//   | fail, conf ≥ 0.8        | candidate fail → retry protocol   |
+//   | fail, conf ≥ 0.8        | candidate fail → confirmed, no re-judge (cost) |
 //   | fail, conf < 0.8        | warn, annotated low-confidence    |
 //
 // Pure: verdict in, outcome out. The orchestrator owns what happens next
-// (retry, re-judge, rollup).
+// (rollup; a candidate-fail here ships as-is, no retry call).
 
 import type { JudgeVerdict } from "../types.js";
 
