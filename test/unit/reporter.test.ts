@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildSummary, fmtDuration, pathOf, hostOf } from "../../src/reporter/index.js";
+import { renderHtml } from "../../src/reporter/html.js";
 import type { RunResult } from "../../src/types.js";
 
 function result(over: Partial<RunResult> = {}): RunResult {
@@ -14,9 +15,9 @@ function result(over: Partial<RunResult> = {}): RunResult {
     cost: { modelCalls: 0, modelUsd: 0 },
     budgetsExhausted: [],
     pages: [
-      { url: "https://app.example.com/checkout", source: "sitemap", status: "fail", headline: "POST /api/payment → 500", decidedBy: "hard-rule", hardRule: "H2", retried: true, flaky: false, signals: {} as any, timings: { visitMs: 1 }, cost: { judgeUsd: 0, flowsUsd: 0 } },
-      { url: "https://app.example.com/account", source: "crawl", status: "warn", headline: "console error from a widget", decidedBy: "hard-rule", retried: false, flaky: false, signals: {} as any, timings: { visitMs: 1 }, cost: { judgeUsd: 0, flowsUsd: 0 } },
-      { url: "https://app.example.com/", source: "config", status: "pass", headline: "clean", decidedBy: "hard-rule", retried: false, flaky: false, signals: {} as any, timings: { visitMs: 1 }, cost: { judgeUsd: 0, flowsUsd: 0 } },
+      { url: "https://app.example.com/checkout", source: "sitemap", status: "fail", headline: "POST /api/payment → 500", decidedBy: "hard-rule", hardRule: "H2", retried: true, flaky: false, signals: emptySignals(), timings: { visitMs: 1 }, cost: { judgeUsd: 0, flowsUsd: 0 } },
+      { url: "https://app.example.com/account", source: "crawl", status: "warn", headline: "console error from a widget", decidedBy: "hard-rule", retried: false, flaky: false, signals: emptySignals(), timings: { visitMs: 1 }, cost: { judgeUsd: 0, flowsUsd: 0 } },
+      { url: "https://app.example.com/", source: "config", status: "pass", headline: "clean", decidedBy: "hard-rule", retried: false, flaky: false, signals: emptySignals(), timings: { visitMs: 1 }, cost: { judgeUsd: 0, flowsUsd: 0 } },
     ],
     coverage: {
       config: 1,
@@ -29,6 +30,24 @@ function result(over: Partial<RunResult> = {}): RunResult {
     },
     artifactsDir: "vigil-report/2026-07-09T06-00-00_abcd",
     ...over,
+  };
+}
+
+function emptySignals(): any {
+  return {
+    url: "https://app.example.com",
+    finalUrl: "https://app.example.com",
+    document: { status: 200, redirects: [], loadMs: 100, settledMs: 200 },
+    requests: [],
+    console: [],
+    pageErrors: [],
+    crashed: false,
+    render: { textLength: 500, title: "App", h1: "Home", textSample: "", errorMarkersFound: [], spinnerStuck: false, screenshotLooksBlank: false, missingSelectors: [], notFoundMarkersFound: [] },
+    contentFields: {},
+    apiMatchedCount: 0,
+    flows: [],
+    screenshotPath: "",
+    timedOut: false,
   };
 }
 
@@ -49,6 +68,124 @@ describe("buildSummary", () => {
   });
   it("notes exhausted budgets when present", () => {
     expect(buildSummary(result({ budgetsExhausted: ["maxModelCostUsd"] }))).toContain("budgets exhausted: maxModelCostUsd");
+  });
+  it("appends judge confidence and formats unjudged budget and error lines", () => {
+    const r = result({
+      pages: [
+        {
+          url: "https://app.example.com/checkout",
+          source: "sitemap",
+          status: "fail",
+          headline: "error toast visible",
+          decidedBy: "judge",
+          judge: {
+            status: "fail",
+            confidence: 0.97,
+            reasons: [{ kind: "visual", summary: "error toast visible", evidence: "toast banner" }],
+          },
+          retried: true,
+          flaky: false,
+          signals: emptySignals(),
+          timings: { visitMs: 1, judgeMs: 100 },
+          cost: { judgeUsd: 0.004, flowsUsd: 0 },
+        },
+        {
+          url: "https://app.example.com/budget-page",
+          source: "crawl",
+          status: "warn",
+          headline: "unjudged — model budget exhausted: clean",
+          decidedBy: "budget",
+          unjudged: true,
+          retried: false,
+          flaky: false,
+          signals: emptySignals(),
+          timings: { visitMs: 1 },
+          cost: { judgeUsd: 0, flowsUsd: 0 },
+        },
+        {
+          url: "https://app.example.com/error-page",
+          source: "crawl",
+          status: "warn",
+          headline: "unjudged — judge error: clean",
+          decidedBy: "error",
+          unjudged: true,
+          judgeError: "provider unavailable",
+          retried: false,
+          flaky: false,
+          signals: emptySignals(),
+          timings: { visitMs: 1 },
+          cost: { judgeUsd: 0, flowsUsd: 0 },
+        },
+      ],
+    });
+    const s = buildSummary(r);
+    expect(s).toContain("❌ **/checkout** — error toast visible (judge 0.97)");
+    expect(s).toContain("⚠️ **/budget-page** — unjudged — model budget: clean");
+    expect(s).toContain("⚠️ **/error-page** — unjudged — judge error: provider unavailable: clean");
+  });
+});
+
+describe("renderHtml", () => {
+  it("renders decidedBy badges, judged/unjudged meta counts, judge card and unjudged notes", async () => {
+    const r = result({
+      pages: [
+        {
+          url: "https://app.example.com/checkout",
+          source: "sitemap",
+          status: "fail",
+          headline: "error toast visible",
+          decidedBy: "judge",
+          judge: {
+            status: "fail",
+            confidence: 0.97,
+            reasons: [{ kind: "visual", summary: "error toast visible", evidence: "toast banner visible" }],
+          },
+          retried: true,
+          flaky: false,
+          signals: emptySignals(),
+          timings: { visitMs: 1, judgeMs: 100 },
+          cost: { judgeUsd: 0.004, flowsUsd: 0 },
+        },
+        {
+          url: "https://app.example.com/budget-page",
+          source: "crawl",
+          status: "warn",
+          headline: "unjudged — model budget exhausted: clean",
+          decidedBy: "budget",
+          unjudged: true,
+          retried: false,
+          flaky: false,
+          signals: emptySignals(),
+          timings: { visitMs: 1 },
+          cost: { judgeUsd: 0, flowsUsd: 0 },
+        },
+        {
+          url: "https://app.example.com/error-page",
+          source: "crawl",
+          status: "warn",
+          headline: "unjudged — judge error: clean",
+          decidedBy: "error",
+          unjudged: true,
+          judgeError: "provider unavailable",
+          retried: false,
+          flaky: false,
+          signals: emptySignals(),
+          timings: { visitMs: 1 },
+          cost: { judgeUsd: 0, flowsUsd: 0 },
+        },
+      ],
+    });
+
+    const html = await renderHtml(r);
+    expect(html).toContain('<span class="tag">judge</span>');
+    expect(html).toContain('<span class="tag">budget</span>');
+    expect(html).toContain('<span class="tag">error</span>');
+    expect(html).toContain("Judged 1 · unjudged 2");
+    expect(html).toContain("Judge verdict");
+    expect(html).toContain("Confidence 0.97");
+    expect(html).toContain("toast banner visible");
+    expect(html).toContain("Unjudged — model budget exhausted");
+    expect(html).toContain("Unjudged — judge error: provider unavailable");
   });
 });
 

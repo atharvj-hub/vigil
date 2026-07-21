@@ -22,6 +22,7 @@ program
   .option("--url <url>", "target URL (overrides config)")
   .option("--fail-on <level>", "broken | degraded — gate the exit code", undefined)
   .option("--only <glob>", "restrict discovered pages to a path glob")
+  .option("--no-judge", "disable AI judge (hard rules only)")
   .option("--json", "print the full RunResult as JSON")
   .option("--prev-verdict <verdict>", "previous run verdict (Slack recovery — Phase 4)")
   .action(async (opts) => {
@@ -29,6 +30,8 @@ program
       const config = await loadConfig();
       if (opts.only) config.discovery = { ...config.discovery, include: [opts.only] };
       if (opts.failOn) config.report = { ...config.report, failOn: opts.failOn };
+      // doc 05: model.judge = false disables the judge stage (hard rules only)
+      if (opts.judge === false) config.model = { ...config.model, judge: false };
 
       const vigil = await Vigil.create(config, opts.url);
       vigil.events.on("page:complete", (p) => {
@@ -183,7 +186,9 @@ export default defineConfig({
     concurrency: 5,
   },
 
-  // model / auth / flows arrive in later phases — see documentation/.
+  // Judge auto-detects from ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY if omitted.
+  // Use --no-judge or model: { judge: false } to disable.
+  // model: { judge: anthropic("claude-haiku-4-5") },
 });
 `;
 

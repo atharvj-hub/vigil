@@ -32,4 +32,8 @@ describe("resolveConfig", () => {
     expect(c.discovery.routes).toEqual(["/checkout"]);
     expect(c.discovery.sitemap).toBe(false);
   });
+  it("passes model: { judge: false } through loosely", () => {
+    const c = resolveConfig({ url: "https://a.com", model: { judge: false } });
+    expect(c.model).toEqual({ judge: false });
+  });
 });

@@ -6,12 +6,13 @@ constitute part of the stable API.
 ## Discovery
 
 ```ts
-export type DiscoverySource = "config" | "sitemap" | "crawl";
+export type DiscoverySource = "config" | "sitemap" | "crawl" | "api";
 
 export interface PageSet {
   pages: DiscoveredPage[];
   generatedAt: ISODate;
   truncated: boolean;               // maxPages cap was hit
+  coverage: DiscoveryCoverage;
 }
 
 export interface DiscoveredPage {
@@ -42,9 +43,15 @@ export interface Signals {
     textLength: number;
     title: string;
     h1: string | null;
+    textSample: string;                 // bounded (~2000 chars) rendered text
     errorMarkersFound: string[];
     spinnerStuck: boolean;
+    screenshotLooksBlank: boolean;     // downsampled screenshot ≈ uniform color
+    missingSelectors: string[];         // checks.requiredSelectors entries not found post-settle
+    notFoundMarkersFound: string[];     // checks.notFoundMarkers matches in rendered text
   };
+  contentFields: Record<string, string | number>; // fields pulled from matching content API response
+  apiMatchedCount: number;              // # of first-party responses matching checks.dataFidelity
   flows: FlowOutcome[];                 // empty unless flows configured for this page
   screenshotPath: string;
   timedOut: boolean;                    // per-page visit cap hit
@@ -106,6 +113,7 @@ export interface PageResult {
   judgeError?: string;                           // short reason when decidedBy === "error"
   retried: boolean;
   flaky: boolean;                                // failed then passed on retry
+  fidelityWarnings?: string[];                   // data-fidelity mismatches (checks.dataFidelity)
   signals: Signals;                              // first capture
   retrySignals?: Signals;                        // present when retried
   timings: { visitMs: number; judgeMs?: number };
@@ -129,6 +137,7 @@ export interface RunResult {
   cost: { modelCalls: number; modelUsd: number };
   budgetsExhausted: string[];                    // e.g. ["maxModelCostUsd"]
   pages: PageResult[];
+  coverage: DiscoveryCoverage;
   artifactsDir: string;
 }
 ```

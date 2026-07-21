@@ -3,7 +3,7 @@
 // (documentation/06-reporting.md)
 
 import { readFile } from "node:fs/promises";
-import type { PageResult, RunResult, Signals } from "../types.js";
+import type { JudgeVerdict, PageResult, RunResult, Signals } from "../types.js";
 import { pathOf, hostOf, fmtDuration, statusOrder, coverageLine } from "./index.js";
 
 const STATUS_LABEL: Record<PageResult["status"], string> = {
@@ -23,6 +23,9 @@ export async function renderHtml(result: RunResult): Promise<string> {
     details.push(await detailHtml(p));
   }
 
+  const judgedCount = result.pages.filter((p) => p.decidedBy === "judge").length;
+  const unjudgedCount = result.pages.filter((p) => p.unjudged || p.decidedBy === "budget" || p.decidedBy === "error").length;
+
   const meta = [
     ["Target", esc(result.target.url)],
     ["Verdict", result.verdict],
@@ -30,6 +33,7 @@ export async function renderHtml(result: RunResult): Promise<string> {
     ["Duration", fmtDuration(result.durationMs)],
     ["Pages", String(result.pages.length)],
     ["Model spend", `$${result.cost.modelUsd.toFixed(2)}`],
+    ["Judged / unjudged", `Judged ${judgedCount} · unjudged ${unjudgedCount}`],
     result.budgetsExhausted.length ? ["Budgets exhausted", esc(result.budgetsExhausted.join(", "))] : null,
     ["Run ID", esc(result.runId)],
   ]
@@ -73,7 +77,7 @@ function rowHtml(p: PageResult): string {
   const id = anchorId(p);
   const link = p.status === "pass" ? esc(pathOf(p.url)) : `<a href="#${id}">${esc(pathOf(p.url))}</a>`;
   return `<tr class="s-${p.status}">
-  <td><span class="pill p-${p.status}">${STATUS_LABEL[p.status]}${p.hardRule ? ` ${p.hardRule}` : ""}</span></td>
+  <td><span class="pill p-${p.status}">${STATUS_LABEL[p.status]}${p.hardRule ? ` ${p.hardRule}` : ""}</span> <span class="tag">${esc(p.decidedBy)}</span></td>
   <td class="url">${link}</td>
   <td>${esc(p.headline)}</td>
   <td class="src">${p.source}</td>
@@ -87,14 +91,52 @@ async function detailHtml(p: PageResult): Promise<string> {
   const evidence = signalEvidence(p.signals);
   const open = p.status === "fail" ? " open" : "";
   return `<details id="${id}" class="detail d-${p.status}"${open}>
-  <summary><span class="pill p-${p.status}">${STATUS_LABEL[p.status]}${p.hardRule ? ` ${p.hardRule}` : ""}</span> ${esc(pathOf(p.url))} — ${esc(p.headline)}</summary>
+  <summary><span class="pill p-${p.status}">${STATUS_LABEL[p.status]}${p.hardRule ? ` ${p.hardRule}` : ""}</span> <span class="tag">${esc(p.decidedBy)}</span> ${esc(pathOf(p.url))} — ${esc(p.headline)}</summary>
   <div class="detail-body">
     ${p.flaky ? `<p class="note">Passed on retry — recorded as flaky.</p>` : ""}
+    ${unjudgedNote(p)}
+    ${judgeCard(p.judge)}
     <div class="shots">${shot}${retryShot}</div>
     ${fidelityEvidence(p.fidelityWarnings)}
     ${evidence}
   </div>
 </details>`;
+}
+
+function unjudgedNote(p: PageResult): string {
+  if (!p.unjudged) return "";
+  const msg =
+    p.decidedBy === "error"
+      ? `Unjudged — judge error${p.judgeError ? `: ${p.judgeError}` : ""}`
+      : "Unjudged — model budget exhausted";
+  return `<p class="note">${esc(msg)}</p>`;
+}
+
+function judgeCard(j: JudgeVerdict | undefined): string {
+  if (!j) return "";
+  const barColor = j.status === "fail" ? "var(--red)" : j.status === "warn" ? "var(--yellow)" : "var(--green)";
+  const pct = Math.round(j.confidence * 100);
+
+  const reasonsList = j.reasons.length
+    ? `<ul class="judge-reasons">${j.reasons
+        .map(
+          (r) =>
+            `<li><span class="tag">${esc(r.kind)}</span> <b>${esc(r.summary)}</b>${
+              r.evidence ? `<div class="evi-code">${esc(r.evidence)}</div>` : ""
+            }</li>`
+        )
+        .join("")}</ul>`
+    : "";
+
+  return `<div class="evi judge-card">
+    <h4>Judge verdict</h4>
+    <div class="judge-header">
+      <span class="pill p-${j.status}">${STATUS_LABEL[j.status] ?? j.status.toUpperCase()}</span>
+      <span>Confidence ${j.confidence.toFixed(2)}</span>
+      <div class="meter-bar"><div class="meter-fill" style="width:${pct}%;background:${barColor}"></div></div>
+    </div>
+    ${reasonsList}
+  </div>`;
 }
 
 function fidelityEvidence(warnings: string[] | undefined): string {
@@ -196,5 +238,11 @@ figcaption{color:var(--muted);font-size:.75rem;margin-top:.25rem}
 .evi ul{margin:.25rem 0;padding-left:1.1rem}.evi li{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82rem;word-break:break-all}
 .tag{background:var(--line);color:var(--muted);padding:0 .3rem;border-radius:3px;font-size:.7rem}
 .note{color:var(--yellow);font-weight:600}
+.meter-bar{display:inline-block;width:100px;height:8px;background:var(--line);border-radius:4px;overflow:hidden;vertical-align:middle;margin-left:.5rem}
+.meter-fill{height:100%;border-radius:4px}
+.judge-header{display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;font-size:.85rem}
+.judge-reasons{margin:.25rem 0;padding-left:1.1rem;list-style:none}
+.judge-reasons li{margin-bottom:.4rem;font-size:.85rem}
+.evi-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.8rem;color:var(--muted);margin-top:.15rem}
 footer{padding:1.5rem 2rem;color:var(--muted);font-size:.8rem}
 `;

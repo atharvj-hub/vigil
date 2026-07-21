@@ -46,8 +46,8 @@ export function buildSummary(result: RunResult): string {
   const fails = result.pages.filter((p) => p.status === "fail");
   const warns = result.pages.filter((p) => p.status === "warn");
   const skips = result.pages.filter((p) => p.status === "skipped");
-  for (const p of fails) lines.push(`❌ **${pathOf(p.url)}** — ${p.headline}`);
-  for (const p of warns) lines.push(`⚠️ **${pathOf(p.url)}** — ${p.headline}`);
+  for (const p of fails) lines.push(formatSummaryLine(p));
+  for (const p of warns) lines.push(formatSummaryLine(p));
   for (const p of skips) lines.push(`⏭️ **${pathOf(p.url)}** — ${p.headline}`);
 
   if (result.budgetsExhausted.length)
@@ -56,6 +56,37 @@ export function buildSummary(result: RunResult): string {
   lines.push("", `_coverage: ${coverageLine(result.coverage)}_`);
 
   return lines.join("\n") + "\n";
+}
+
+// doc 06: format page summary lines with judge confidence or explicit unjudged mode (budget vs error)
+function formatSummaryLine(p: PageResult): string {
+  const mark = { fail: "❌", warn: "⚠️", pass: "✅", skipped: "⏭️" }[p.status];
+  let headline = p.headline;
+
+  if (p.decidedBy === "judge" && p.judge && !headline.includes("low confidence")) {
+    headline += ` (judge ${p.judge.confidence})`;
+  } else if (p.unjudged) {
+    if (p.decidedBy === "error") {
+      const errDetail = p.judgeError ? `: ${p.judgeError}` : "";
+      if (headline.startsWith("unjudged — judge error: ")) {
+        const rest = headline.slice("unjudged — judge error: ".length);
+        headline = `unjudged — judge error${errDetail}${rest ? `: ${rest}` : ""}`;
+      } else if (headline.startsWith("unjudged — judge error")) {
+        headline = `unjudged — judge error${errDetail}`;
+      } else {
+        headline = `unjudged — judge error${errDetail}: ${headline}`;
+      }
+    } else if (p.decidedBy === "budget") {
+      if (!headline.includes("unjudged")) {
+        headline = `unjudged — model budget: ${headline}`;
+      } else if (headline.startsWith("unjudged — model budget exhausted: ")) {
+        const rest = headline.slice("unjudged — model budget exhausted: ".length);
+        headline = `unjudged — model budget: ${rest}`;
+      }
+    }
+  }
+
+  return `${mark} **${pathOf(p.url)}** — ${headline}`;
 }
 
 /** The one-line answer to "did discovery hit all the pages?" (documentation/03). */
