@@ -28,7 +28,13 @@ Three hard architectural rules:
   through it. This makes cost accounting and provider swapping trivial, and keeps the system
   model-agnostic by construction: the gateway accepts any AI SDK `LanguageModel`.
 - **`Collector` is pure observation.** It navigates and records; it never clicks, types, or
-  submits. All interaction lives in `FlowRunner` behind explicit user config.
+  submits. All interaction lives in `FlowRunner` behind explicit user config. One narrow,
+  documented exception: best-effort cookie-consent-banner dismissal
+  (`checks.dismissCookieBanners`, default on) — a fresh context has no consent state, so most
+  real sites show a first-visit modal that has nothing to do with app health but corrupts every
+  screenshot/render signal underneath it. Bounded to a fixed set of known consent-button
+  patterns, environment normalization in the same spirit as the animation-disable CSS injection,
+  not the flow/interaction machinery FlowRunner owns.
 - **No component reads artifacts from a previous run.** Runs are independent by construction.
   (Artifacts are written for humans and CI, not consumed by vigil.)
 

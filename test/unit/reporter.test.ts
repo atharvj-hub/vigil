@@ -120,8 +120,8 @@ describe("buildSummary", () => {
     });
     const s = buildSummary(r);
     expect(s).toContain("❌ **/checkout** — error toast visible (judge 0.97)");
-    expect(s).toContain("⚠️ **/budget-page** — unjudged — model budget: clean");
-    expect(s).toContain("⚠️ **/error-page** — unjudged — judge error: provider unavailable: clean");
+    expect(s).toContain("⚠️ **/budget-page** — unjudged — model budget exhausted: clean");
+    expect(s).toContain("⚠️ **/error-page** — unjudged — judge error: clean — reason: provider unavailable");
   });
 });
 

@@ -1,12 +1,23 @@
 // Collector — visits ONE page and captures the Signals + screenshot (doc 04).
 // Pure observation: it navigates and records; it never clicks, types, or submits
-// (02-architecture.md: "Collector is pure observation").
+// (02-architecture.md: "Collector is pure observation") — with one narrow,
+// documented exception: best-effort cookie-consent-banner dismissal (see
+// dismissCookieBanner below). A fresh browser context carries no consent
+// state, so most real sites render a first-visit consent modal that a real
+// user dismisses in seconds. Left alone, that modal becomes part of every
+// screenshot and can be misread as broken content by both hard rules and the
+// judge — evidence about vigil's own capture, not the app. This is
+// environment normalization (same class as the animation-disable CSS
+// injection below), not the flow/interaction machinery FlowRunner owns —
+// bounded to a fixed, well-known set of consent-button patterns, best-effort,
+// and disableable via checks.dismissCookieBanners.
 //
 // The settle protocol (doc 04) is the flake-control-at-the-source:
 //   1. await 'load' (hard cap 15s — a timeout is a signal, not an exception)
-//   2. network-quiet window: ≤2 in-flight for 750ms, capped 10s (ws/sse exempt)
-//   3. 250ms paint grace, animations disabled
-//   4. capture
+//   2. dismiss a cookie-consent banner, if present (best-effort)
+//   3. network-quiet window: ≤2 in-flight for 750ms, capped 10s (ws/sse exempt)
+//   4. 250ms paint grace, animations disabled
+//   5. capture
 
 import type { Browser, Request } from "playwright";
 import type { Signals, RequestSummary, ConsoleEntry } from "./types.js";
@@ -62,6 +73,46 @@ export interface CollectOptions {
   dataFidelity: { apiPathPatterns: RegExp[]; fields: string[] };
   requiredSelectors: string[];
   notFoundMarkers: RegExp[];
+  dismissCookieBanners: boolean;
+}
+
+// Fixed, bounded set of consent-button patterns covering the handful of
+// consent-management platforms (OneTrust, Cookiebot, Osano, Quantcast, generic
+// GDPR/CCPA banners) that account for most real-world sites, plus a
+// text-based fallback for everything else. Deliberately does not attempt to
+// be exhaustive — a banner this doesn't catch just leaves the page as it was
+// (same as today), it never makes evidence worse.
+const COOKIE_SELECTOR = [
+  "#onetrust-accept-btn-handler",
+  "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
+  ".osano-cm-accept-all",
+  "[data-testid='uc-accept-all-button']",
+  "button[aria-label='Accept all']",
+  "button[aria-label='Accept All']",
+].join(",");
+const COOKIE_TEXT_RE =
+  /^(accept all|accept all cookies|i accept|accept|allow all|allow all cookies|got it|agree|aceptar todo|aceptar)$/i;
+
+/** Best-effort: click one consent-accept control if one is visibly present. Never throws. */
+async function dismissCookieBanner(page: import("playwright").Page): Promise<void> {
+  try {
+    const known = page.locator(COOKIE_SELECTOR).first();
+    if (await known.isVisible({ timeout: 800 }).catch(() => false)) {
+      await known.click({ timeout: 800 });
+      return;
+    }
+    const candidates = page.getByRole("button", { name: COOKIE_TEXT_RE });
+    const count = await candidates.count();
+    for (let i = 0; i < Math.min(count, 5); i++) {
+      const btn = candidates.nth(i);
+      if (await btn.isVisible({ timeout: 300 }).catch(() => false)) {
+        await btn.click({ timeout: 800 });
+        return;
+      }
+    }
+  } catch {
+    /* best-effort — no banner, or the click failed; leave the page as-is */
+  }
 }
 
 /** Recursively pull named scalar fields out of a parsed JSON value (bounded depth). */
@@ -228,6 +279,7 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
   // ── Network-quiet window (only meaningful if navigation produced a document) ──
   let settledMs: number | null = null;
   if (navigationError === undefined) {
+    if (opts.dismissCookieBanners && !crashed) await dismissCookieBanner(page);
     await waitForNetworkQuiet(() => inFlight, () => elapsed(started) > opts.perPageVisitMs);
     await page.waitForTimeout(PAINT_GRACE_MS);
     settledMs = Date.now() - navStart;

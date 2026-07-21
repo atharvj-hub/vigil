@@ -78,6 +78,22 @@ const routes = {
     <p>This page renders perfectly. It just has an image that never finishes,
     so the browser load event never fires. That is a warn at most, never a red.</p>
     <img src="/hang" width="1" height="1">${nav}`),
+  // A genuinely healthy page, but a fresh browser context has no consent
+  // state, so a first-visit cookie banner covers most of the viewport — the
+  // exact real-world confound that motivated collector.ts's dismiss step.
+  "/cookiegate": html(
+    "Cookie-gated",
+    `<h1>Welcome</h1><p>This page is completely healthy once the banner is gone.</p>${nav}
+     <div id="consent" style="position:fixed;inset:0;background:#fff;z-index:999">
+       <p>We use cookies.</p>
+       <button aria-label="Accept all">Accept all</button>
+     </div>
+     <script>
+       document.querySelector('#consent button').addEventListener('click', () => {
+         document.getElementById('consent').remove();
+       });
+     </script>`
+  ),
 };
 
 function dashboardHtml(variant) {

@@ -7,16 +7,24 @@
 // stays exactly what the architecture promised (evidence in, verdict out).
 
 import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
 import type { Signals } from "../types.js";
 import type { ResolvedModel } from "./providers.js";
 import { buildDigest, serializeDigest } from "./digest.js";
 import { buildJudgePrompt } from "./prompt.js";
 import { callJudgeModel, type JudgeCallResult } from "./modelGateway.js";
 
-/** The screenshot could not be read — the judge never fabricates missing evidence. */
+/**
+ * The screenshot could not be read — the judge never fabricates missing
+ * evidence. Message uses the basename + error code only, never the full OS
+ * path: judgeError ships straight into reports, and a local filesystem path
+ * has no business in a page that gets read by a human or posted to Slack.
+ */
 export class ScreenshotUnreadableError extends Error {
   constructor(path: string, cause: unknown) {
-    super(`Screenshot unreadable at "${path}": ${cause instanceof Error ? cause.message : String(cause)}`);
+    const code = cause && typeof cause === "object" && "code" in cause ? String(cause.code) : undefined;
+    const reason = code ?? (cause instanceof Error ? cause.message : String(cause));
+    super(`Screenshot unreadable (${basename(path)}): ${reason}`);
     this.name = "ScreenshotUnreadableError";
     this.cause = cause;
   }

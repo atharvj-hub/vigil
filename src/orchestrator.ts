@@ -266,6 +266,7 @@ export class Vigil {
       dataFidelity: this.config.checks.dataFidelity,
       requiredSelectors: this.config.checks.requiredSelectors,
       notFoundMarkers: this.config.checks.notFoundMarkers,
+      dismissCookieBanners: this.config.checks.dismissCookieBanners,
     };
 
     const t0 = Date.now();

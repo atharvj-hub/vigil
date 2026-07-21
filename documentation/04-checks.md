@@ -66,11 +66,16 @@ step log.
 Most E2E flakiness is timing. vigil's settle protocol, per page:
 
 1. Await the `load` event (hard cap 15s — a timeout is itself a signal, not an exception).
-2. Then await a **network-quiet window**: no more than 2 in-flight requests for 750ms, capped at
+2. Best-effort cookie-consent-banner dismissal (`checks.dismissCookieBanners`, default on): a
+   fresh browser context has no consent state, so most real sites show a first-visit modal that
+   would otherwise sit on top of every screenshot and render-heuristic capture — evidence about
+   vigil's own capture, not the app. Click a known consent-accept control if one is visibly
+   present; no-op if not found. Bounded, silent on failure, never blocks the rest of the visit.
+3. Then await a **network-quiet window**: no more than 2 in-flight requests for 750ms, capped at
    10s total (long-polling/websockets exempted by resource type).
-3. Then a fixed 250ms paint grace, animations disabled via `prefers-reduced-motion` emulation
+4. Then a fixed 250ms paint grace, animations disabled via `prefers-reduced-motion` emulation
    and CSS injection.
-4. Capture. Total worst case ≈ 26s, typical ≈ 2–4s.
+5. Capture. Total worst case ≈ 26s, typical ≈ 2–4s.
 
 Late requests that complete after capture are still recorded (the listener stays until context
 close) and marked `afterSettle` — visible to the judge, useful for hung-dependency evidence.

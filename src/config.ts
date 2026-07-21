@@ -88,6 +88,12 @@ const ChecksSchema = z
       .object({ width: z.number().int().default(1280), height: z.number().int().default(720) })
       .default({}),
     browser: z.enum(["chromium", "firefox", "webkit"]).default("chromium"),
+    // On by default: a fresh browser context has no consent state, so most
+    // real sites render a cookie/consent modal on first visit — evidence that
+    // has nothing to do with whether the app itself is broken, and that both
+    // hard rules and the judge can misread (doc 04). Narrow, bounded exception
+    // to "Collector is pure observation" (doc 02) — see collector.ts.
+    dismissCookieBanners: z.boolean().default(true),
     // Data-fidelity (opt-in, off by default): does a named content field's
     // value — read from a first-party JSON response matching apiPathPatterns —
     // actually appear in the rendered page text? Catches the backend-returns-

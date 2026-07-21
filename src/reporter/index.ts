@@ -58,32 +58,20 @@ export function buildSummary(result: RunResult): string {
   return lines.join("\n") + "\n";
 }
 
-// doc 06: format page summary lines with judge confidence or explicit unjudged mode (budget vs error)
+// doc 06: format page summary lines with judge confidence or explicit unjudged reason.
+// p.headline (built by the orchestrator's unjudgedWarn) already states *that*
+// a page went unjudged; this only appends the technical *why* for the error
+// case, since that detail lives solely in p.judgeError. A plain trailing
+// clause — never string-slicing/reconstructing p.headline — so it can't
+// produce garbled output regardless of what characters judgeError contains.
 function formatSummaryLine(p: PageResult): string {
   const mark = { fail: "❌", warn: "⚠️", pass: "✅", skipped: "⏭️" }[p.status];
   let headline = p.headline;
 
   if (p.decidedBy === "judge" && p.judge && !headline.includes("low confidence")) {
     headline += ` (judge ${p.judge.confidence})`;
-  } else if (p.unjudged) {
-    if (p.decidedBy === "error") {
-      const errDetail = p.judgeError ? `: ${p.judgeError}` : "";
-      if (headline.startsWith("unjudged — judge error: ")) {
-        const rest = headline.slice("unjudged — judge error: ".length);
-        headline = `unjudged — judge error${errDetail}${rest ? `: ${rest}` : ""}`;
-      } else if (headline.startsWith("unjudged — judge error")) {
-        headline = `unjudged — judge error${errDetail}`;
-      } else {
-        headline = `unjudged — judge error${errDetail}: ${headline}`;
-      }
-    } else if (p.decidedBy === "budget") {
-      if (!headline.includes("unjudged")) {
-        headline = `unjudged — model budget: ${headline}`;
-      } else if (headline.startsWith("unjudged — model budget exhausted: ")) {
-        const rest = headline.slice("unjudged — model budget exhausted: ".length);
-        headline = `unjudged — model budget: ${rest}`;
-      }
-    }
+  } else if (p.decidedBy === "error" && p.judgeError) {
+    headline = `${headline} — reason: ${p.judgeError}`;
   }
 
   return `${mark} **${pathOf(p.url)}** — ${headline}`;

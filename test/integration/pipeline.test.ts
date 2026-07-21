@@ -97,6 +97,26 @@ describe("targeted single-page checks", () => {
     expect(p.status).toBe("warn");
     expect(p.hardRule).toBeUndefined();
   });
+
+  it("dismisses a first-visit cookie banner before capture — content isn't blank/broken", async () => {
+    const vigil = await Vigil.create({ report: { dir: reportDir }, model: { judge: false } }, base);
+    const p = await vigil.checkPage("/cookiegate");
+    expect(p.status).toBe("pass");
+    expect(p.signals.render.h1).toBe("Welcome");
+    expect(p.signals.render.textSample).not.toContain("We use cookies");
+  });
+
+  it("checks.dismissCookieBanners: false leaves the banner up (opt-out honored)", async () => {
+    const vigil = await Vigil.create(
+      { report: { dir: reportDir }, model: { judge: false }, checks: { dismissCookieBanners: false } },
+      base
+    );
+    const p = await vigil.checkPage("/cookiegate");
+    // The banner's own text is still present in the DOM — proves the dismiss
+    // step actually ran in the default-on case above, rather than the click
+    // handler firing regardless of the option.
+    expect(p.signals.render.textSample).toContain("We use cookies");
+  });
 });
 
 describe("a clean subset is HEALTHY", () => {
