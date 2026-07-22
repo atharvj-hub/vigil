@@ -16,8 +16,26 @@
 //   1. await 'load' (hard cap 15s — a timeout is a signal, not an exception)
 //   2. dismiss a cookie-consent banner, if present (best-effort)
 //   3. network-quiet window: ≤2 in-flight for 750ms, capped 10s (ws/sse exempt)
-//   4. 250ms paint grace, animations disabled
-//   5. capture
+//   4. DOM-stability wait: poll a small render fingerprint (text length, element
+//      count, spinner visibility, visible heading count, readyState), capture
+//      once it holds unchanged for a continuous window, capped 8s
+//      (checks.domStabilityWait)
+//   5. 250ms paint grace, animations disabled
+//   6. capture
+//
+// Step 4 exists because network-quiet alone is a known-unreliable readiness
+// signal for client-rendered apps: there's often a gap where the JS bundle
+// has finished loading (network goes quiet) but is still parsing and
+// mounting the DOM, with zero network activity during that gap. Capturing on
+// network-quiet alone can catch the empty shell — a false "broken" page — or,
+// if other requests keep the network busy a little longer, capture a
+// half-rendered page and call it clean — a false "healthy" page. Waiting for
+// rendering to stop changing catches both directions. Text length alone is a
+// weak stability signal — plenty of real UI updates don't change it (a
+// skeleton swapped for real cards of similar length, a spinner replaced by an
+// SVG, CSS revealing a hidden section) — so the fingerprint also tracks
+// element count and spinner visibility, the two cheapest signals that catch
+// those cases without a full DOM diff.
 
 import type { Browser, Request } from "playwright";
 import type { Signals, RequestSummary, ConsoleEntry } from "./types.js";
@@ -26,6 +44,9 @@ const LOAD_CAP_MS = 15_000;
 const QUIET_WINDOW_MS = 750;
 const QUIET_MAX_MS = 10_000;
 const QUIET_INFLIGHT_MAX = 2;
+const DOM_STABLE_POLL_MS = 200;
+const DOM_STABLE_WINDOW_MS = 500;
+const DOM_STABLE_MAX_MS = 8_000;
 const PAINT_GRACE_MS = 250;
 const MAX_CONSOLE = 20;
 const MAX_TEXT_SAMPLE = 2_000; // bounded rendered-text sample for data-fidelity matching — never the full body
@@ -37,6 +58,10 @@ const SCREENSHOT_CAP_MS = 10_000;
 
 // Resource types exempt from the network-quiet count (long-lived by nature).
 const QUIET_EXEMPT = new Set(["websocket", "eventsource"]);
+
+// Shared with the final render-heuristics capture below — one definition of
+// "what counts as a spinner" for both the stability wait and the report.
+const SPINNER_SELECTOR = '[role="progressbar"],[aria-busy="true"],.spinner,.loading,.loader';
 
 // Built-in framework error-page / error-boundary markers (doc 04).
 const BUILTIN_MARKERS = [
@@ -74,6 +99,7 @@ export interface CollectOptions {
   requiredSelectors: string[];
   notFoundMarkers: RegExp[];
   dismissCookieBanners: boolean;
+  domStabilityWait: boolean;
 }
 
 // Fixed, bounded set of consent-button patterns covering the handful of
@@ -281,6 +307,9 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
   if (navigationError === undefined) {
     if (opts.dismissCookieBanners && !crashed) await dismissCookieBanner(page);
     await waitForNetworkQuiet(() => inFlight, () => elapsed(started) > opts.perPageVisitMs);
+    if (opts.domStabilityWait && !crashed) {
+      await waitForDomStable(page, () => elapsed(started) > opts.perPageVisitMs);
+    }
     await page.waitForTimeout(PAINT_GRACE_MS);
     settledMs = Date.now() - navStart;
     if (elapsed(started) > opts.perPageVisitMs) timedOut = true;
@@ -304,10 +333,9 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
   if (navigationError === undefined && !crashed) {
     finalUrl = page.url();
     try {
-      const dom = await page.evaluate((selectors) => {
+      const dom = await page.evaluate(({ selectors, spinnerSel }) => {
         const text = document.body ? document.body.innerText : "";
         const h1 = document.querySelector("h1");
-        const spinnerSel = '[role="progressbar"],[aria-busy="true"],.spinner,.loading,.loader';
         const spinnerVisible = Array.from(document.querySelectorAll(spinnerSel)).some((el) => {
           const r = (el as HTMLElement).getBoundingClientRect();
           const style = getComputedStyle(el as HTMLElement);
@@ -338,7 +366,7 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
           visibleEls,
           missingSelectors: missing,
         };
-      }, opts.requiredSelectors);
+      }, { selectors: opts.requiredSelectors, spinnerSel: SPINNER_SELECTOR });
       const found = allMarkers.filter((re) => re.test(dom.text)).map((re) => re.source);
       const notFoundFound = opts.notFoundMarkers.filter((re) => re.test(dom.text)).map((re) => re.source);
       render = {
@@ -400,6 +428,88 @@ function collectRedirectChain(response: import("playwright").Response): string[]
     req = from;
   }
   return chain;
+}
+
+/**
+ * A small, cheap render fingerprint — deliberately not a single scalar.
+ * `textLength` alone misses plenty of real UI changes (a skeleton swapped
+ * for real cards of similar length, a spinner replaced by an SVG, CSS
+ * revealing a hidden section) that don't move the character count but very
+ * much change what's on screen. `childElementCount` and `spinnerVisible`
+ * catch most of those without a full DOM diff; `visibleHeadingCount` and
+ * `readyState` are two more free signals from the same round trip.
+ */
+interface DomFingerprint {
+  textLength: number;
+  childElementCount: number;
+  spinnerVisible: boolean;
+  visibleHeadingCount: number;
+  readyState: string;
+}
+
+async function readDomFingerprint(page: import("playwright").Page, spinnerSelector: string): Promise<DomFingerprint> {
+  return page.evaluate((spinnerSel) => {
+    const isVisible = (el: Element) => {
+      const r = (el as HTMLElement).getBoundingClientRect();
+      const style = getComputedStyle(el as HTMLElement);
+      return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    return {
+      textLength: (document.body?.innerText ?? "").trim().length,
+      childElementCount: document.body?.getElementsByTagName("*").length ?? 0,
+      spinnerVisible: Array.from(document.querySelectorAll(spinnerSel)).some(isVisible),
+      visibleHeadingCount: Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6")).filter(isVisible).length,
+      readyState: document.readyState,
+    };
+  }, spinnerSelector);
+}
+
+function fingerprintsEqual(a: DomFingerprint, b: DomFingerprint): boolean {
+  return (
+    a.textLength === b.textLength &&
+    a.childElementCount === b.childElementCount &&
+    a.spinnerVisible === b.spinnerVisible &&
+    a.visibleHeadingCount === b.visibleHeadingCount &&
+    a.readyState === b.readyState
+  );
+}
+
+/**
+ * Poll the render fingerprint until it has held unchanged for a continuous
+ * DOM_STABLE_WINDOW_MS (mirrors waitForNetworkQuiet's own quiet-window
+ * pattern below — any change resets the window), or the cap / remaining page
+ * budget is hit. Best-effort: any evaluation failure (page navigating away,
+ * closing) just ends the wait — there's nothing more to wait for at that
+ * point.
+ *
+ * This is a heuristic, not a guarantee: it cannot distinguish "settled,
+ * nothing left to render" from "hasn't started rendering yet" for content
+ * that changes only once, long after an otherwise-static initial paint — no
+ * passive observation can, without knowing the future. What it reliably
+ * catches is the common real case: content still actively mounting/changing
+ * right as network-quiet fires.
+ */
+async function waitForDomStable(page: import("playwright").Page, budgetExceeded: () => boolean): Promise<void> {
+  const start = Date.now();
+  let last: DomFingerprint | null = null;
+  let unchangedSince: number | null = null;
+  while (Date.now() - start < DOM_STABLE_MAX_MS) {
+    if (budgetExceeded()) return;
+    let current: DomFingerprint;
+    try {
+      current = await readDomFingerprint(page, SPINNER_SELECTOR);
+    } catch {
+      return;
+    }
+    if (last && fingerprintsEqual(current, last)) {
+      if (unchangedSince === null) unchangedSince = Date.now();
+      else if (Date.now() - unchangedSince >= DOM_STABLE_WINDOW_MS) return;
+    } else {
+      last = current;
+      unchangedSince = null;
+    }
+    await new Promise((r) => setTimeout(r, DOM_STABLE_POLL_MS));
+  }
 }
 
 async function waitForNetworkQuiet(inFlight: () => number, budgetExceeded: () => boolean): Promise<void> {

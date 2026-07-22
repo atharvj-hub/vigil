@@ -73,9 +73,33 @@ Most E2E flakiness is timing. vigil's settle protocol, per page:
    present; no-op if not found. Bounded, silent on failure, never blocks the rest of the visit.
 3. Then await a **network-quiet window**: no more than 2 in-flight requests for 750ms, capped at
    10s total (long-polling/websockets exempted by resource type).
-4. Then a fixed 250ms paint grace, animations disabled via `prefers-reduced-motion` emulation
+4. Then a **DOM-stability wait** (`checks.domStabilityWait`, default on): network-quiet alone is
+   a known-unreliable readiness signal for client-rendered apps — there's often a gap where the
+   JS bundle has finished downloading (network goes quiet) but is still parsing and mounting,
+   producing zero network traffic in that gap. Poll a small render **fingerprint** every 200ms —
+   `{ textLength, childElementCount, spinnerVisible, visibleHeadingCount, readyState }` — and
+   capture once the whole fingerprint has held unchanged for a continuous 500ms window (any
+   change resets the window — same pattern as the network-quiet wait above), capped at 8s.
+   Text length alone was the first version of this and is a weak signal on its own: plenty of
+   real UI updates don't change it — a skeleton swapped for real cards of similar length, a
+   spinner replaced by an SVG, CSS revealing a hidden section, hydration fixing a broken button.
+   The fingerprint's other four fields catch most of that class without a full DOM diff. This is
+   the fix for two related failure classes discovered dogfooding against real SPAs: a page
+   captured too early reads as falsely broken (H4, or a judge fail on a near-empty screenshot); a
+   page captured mid-render on a site whose *other* requests happened to keep the network busy a
+   little longer reads as falsely healthy (a judge pass on a half-rendered shell). Server-
+   rendered pages are unaffected — their text (and the rest of the fingerprint) is complete on
+   first paint, so this returns immediately.
+   **A known limit, not a bug:** this is a heuristic, and it cannot distinguish "settled, nothing
+   left to render" from "hasn't started rendering yet" for content that changes only once, long
+   after an otherwise-static initial paint — no passive observation can, without knowing the
+   future. What it reliably catches is content still actively mounting/changing right as
+   network-quiet fires, which is the common real case. A fuller DOM diff/fingerprint (or a
+   framework-specific "app ready" hook) would close more of this gap; not implemented here to
+   keep the check cheap and framework-agnostic.
+5. Then a fixed 250ms paint grace, animations disabled via `prefers-reduced-motion` emulation
    and CSS injection.
-5. Capture. Total worst case ≈ 26s, typical ≈ 2–4s.
+6. Capture. Total worst case ≈ 34s, typical ≈ 2–4s.
 
 Late requests that complete after capture are still recorded (the listener stays until context
 close) and marked `afterSettle` — visible to the judge, useful for hung-dependency evidence.

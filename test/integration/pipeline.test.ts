@@ -117,6 +117,32 @@ describe("targeted single-page checks", () => {
     // handler firing regardless of the option.
     expect(p.signals.render.textSample).toContain("We use cookies");
   });
+
+  it("waits for the DOM to stop changing before capturing — catches content that mounts after network goes quiet", async () => {
+    const vigil = await Vigil.create({ report: { dir: reportDir }, model: { judge: false } }, base);
+    const p = await vigil.checkPage("/spa-slow-render");
+    expect(p.signals.render.textSample).toContain("Real content has finally rendered here");
+  });
+
+  it("checks.domStabilityWait: false captures before the delayed content mounts (opt-out honored)", async () => {
+    const vigil = await Vigil.create(
+      { report: { dir: reportDir }, model: { judge: false }, checks: { domStabilityWait: false } },
+      base
+    );
+    const p = await vigil.checkPage("/spa-slow-render");
+    // Network goes quiet almost immediately on this page (nothing was ever
+    // fetched), so with the stability wait off, capture happens well before
+    // the 1400ms timer — proves the wait above is what caught the content,
+    // not some other unrelated delay in the pipeline.
+    expect(p.signals.render.textSample).not.toContain("Real content has finally rendered here");
+  });
+
+  it("the stability fingerprint catches a same-length spinner→content swap that text length alone would miss", async () => {
+    const vigil = await Vigil.create({ report: { dir: reportDir }, model: { judge: false } }, base);
+    const p = await vigil.checkPage("/spa-same-length-swap");
+    expect(p.signals.render.textSample).toContain("Real content has now mounted");
+    expect(p.signals.render.spinnerStuck).toBe(false);
+  });
 });
 
 describe("a clean subset is HEALTHY", () => {

@@ -78,6 +78,43 @@ const routes = {
     <p>This page renders perfectly. It just has an image that never finishes,
     so the browser load event never fires. That is a warn at most, never a red.</p>
     <img src="/hang" width="1" height="1">${nav}`),
+  // A genuinely healthy SPA page: the doc loads with an empty shell, network
+  // goes quiet almost immediately (nothing else was fetched yet — the initial
+  // network-quiet window fires in well under a second on a local server),
+  // and only *after* that (calibrated to land between the pre-fix capture
+  // point and the point the DOM-stability wait itself would time out on a
+  // static shell) does a lazily-started fetch bring the real content in —
+  // mirroring what afterSettle showed on a real site (requests that land
+  // after the network-quiet window already fired). Reproduces the settle-gap
+  // that motivated collector.ts's DOM-stability wait: a capture keyed on
+  // network-quiet alone lands on the empty shell.
+  "/spa-slow-render": html(
+    "SPA",
+    `<div id="root">Loading…</div>${nav}
+     <script>
+       setTimeout(() => {
+         fetch('/api/spa-data').then((r) => r.json()).then((d) => {
+           document.getElementById('root').textContent = d.text;
+         });
+       }, 1400);
+     </script>`
+  ),
+  // Same idea, but the "before" and "after" text are the SAME length (both
+  // exactly 28 chars, verified) — the exact class of change plain
+  // text-length stability would miss: a spinner (class="spinner") is
+  // swapped for real content of equal length, with nothing else in the DOM
+  // changing size. Only the fingerprint's spinnerVisible field catches this.
+  "/spa-same-length-swap": html(
+    "SPA",
+    `<div id="root" class="spinner">Loading placeholder text now</div>${nav}
+     <script>
+       setTimeout(() => {
+         var el = document.getElementById('root');
+         el.className = '';
+         el.textContent = 'Real content has now mounted';
+       }, 1400);
+     </script>`
+  ),
   // A genuinely healthy page, but a fresh browser context has no consent
   // state, so a first-visit cookie banner covers most of the viewport — the
   // exact real-world confound that motivated collector.ts's dismiss step.
@@ -170,6 +207,14 @@ export function createFixtureServer() {
     if (url === "/hang") return; // never respond — the load event never fires
     if (url === "/missing-chunk.js") return send(res, 404, "text/plain", "not found");
     if (url === "/api/broken") return send(res, 500, "application/json", `{"error":"payment failed"}`);
+    if (url === "/api/spa-data") {
+      return send(
+        res,
+        200,
+        "application/json",
+        `{"text":"Real content has finally rendered here with plenty of text to prove the page is genuinely healthy."}`
+      );
+    }
     if (url === "/boom") return send(res, 500, "text/html", html("Error", "<h1>Internal Server Error</h1>"));
     if (url === "/dashboard") {
       const variant = fullUrl.searchParams.get("variant") ?? "clean";

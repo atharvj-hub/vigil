@@ -63,6 +63,89 @@ Phase 2 implements the full AI verdict layer behind a single orchestrator seam, 
 5. **Multi-viewport** — is a mobile-width second screenshot per page worth ~2× judge cost?
    (Config-gated if added; default off.)
 6. **Name** — `vigil` is a working name; check npm availability before Phase 4.
+7. **DOM-stability fingerprint richness** — the current 5-field fingerprint (doc 04) was chosen
+   as the cheapest set that catches common same-length UI swaps (skeleton→cards, spinner→SVG).
+   It still can't catch every same-length, same-element-count, spinner-free swap (e.g. an image
+   gallery finishing its loads with no DOM structure change) or a single very-late change
+   preceded by total silence (the heuristic's fundamental blind spot; doc 04). A fuller DOM
+   diff/mutation-count signal or a framework-specific "app ready" hook would close more of this,
+   at more implementation cost — revisit if dogfooding surfaces a real miss.
+
+## Open research issues
+
+### Judge evidence interpretation contract
+
+**Status:** Open research — not scheduled, not a workaround target.
+
+**Problem.** The Collector now produces reliable render evidence (validated below by the
+`/careers` improvement). The judge can still misinterpret that evidence. On qplus.tv `/`, the
+model cited `render.title` (metadata) as evidence of successful rendering while ignoring
+`render.spinnerStuck = true`, `render.textSample = "EXTERNAL_URL_IDENTIFIER"`, and a screenshot
+showing only a loading spinner on a black background.
+
+**Evidence** (captured 2026-07-22, after the DOM-stability collector fix — this is reproducible
+against the same evidence, not a stale capture):
+
+Digest fragment actually sent to the judge:
+```json
+"render": {
+  "textLength": 23,
+  "title": "Q plus - Watch Matches, Interviews, Replays & More",
+  "h1": null,
+  "textSample": "EXTERNAL_URL_IDENTIFIER",
+  "errorMarkersFound": [],
+  "spinnerStuck": true,
+  "screenshotLooksBlank": false,
+  "missingSelectors": [],
+  "notFoundMarkersFound": []
+}
+```
+
+Screenshot: solid black viewport, one visible loading spinner mid-animation, no other content —
+unambiguous, not a borderline capture.
+
+Judge rationale (verbatim, confidence 0.95, status `pass`):
+> "Visible title indicates content loaded" — evidence: "render.textSample shows page has a
+> title 'Q plus - Watch Matches, Interviews, Replays & More'"
+
+That citation conflates two different fields: `render.title` is `document.title` (browser-tab
+metadata, present on every page regardless of render state) with `render.textSample` (the
+actual visible body text, which in this digest is literally `"EXTERNAL_URL_IDENTIFIER"`). The
+model treated a metadata field's presence as evidence, instead of reading the value of the field
+that actually reports what's on screen.
+
+**Root cause hypothesis.**
+- The prompt (`JUDGE_SYSTEM_INSTRUCTION` in `src/judge/prompt.ts`) never distinguishes metadata
+  fields (`title`, always non-empty) from render-state fields (`textSample`, `spinnerStuck`,
+  `screenshotLooksBlank`) — nothing marks which fields are load-bearing evidence.
+- The judge is allowed to jump directly from raw evidence to a final verdict + reasons, with no
+  forced intermediate step that requires it to explicitly assess render completeness before
+  committing to a status.
+
+**Non-goals** (deliberately, to keep this a judge-side fix, not a policy-side patch):
+- Do not add a deterministic contradiction-guard override for this case.
+- Do not promote `spinnerStuck` into a hard rule — it's correctly a heuristic today precisely
+  because plenty of legitimate pages (a loading dashboard waiting on a websocket, an infinite
+  feed, a live sports ticker, a progress/upload screen) show a persistent spinner while healthy.
+  A deterministic override here would move interpretation that belongs to the judge back into
+  hard-coded policy — architectural drift away from "Collector observes, Judge interprets."
+- Do not modify `verdictPolicy.ts` as a workaround for this specific failure.
+
+**Research directions.**
+- Structured reasoning over render state *before* the verdict — e.g. forcing the model through
+  explicit sub-questions (is a loading indicator visible? did meaningful content render? is the
+  page still loading? what visible evidence supports each answer?) ahead of the final
+  pass/warn/fail, so it can't skip straight to a plausible-sounding verdict without engaging the
+  render fields.
+- Better field semantics in the prompt/digest — explicit documentation of which fields are
+  metadata vs. rendered-content evidence.
+- Whether `SignalsDigest` itself should structurally separate metadata (`title`, `document.status`)
+  from visible-page evidence (`textSample`, `spinnerStuck`, `screenshotLooksBlank`), rather than
+  relying on the prompt alone to make that distinction.
+
+**Scope note:** treat this as a judge-contract redesign, not a prompt tweak — a fresh branch, not
+folded into collector work, so it stays answerable independently later whether a given behavior
+change came from better evidence (Collector) or better reasoning (Judge).
 
 ## What success looks like (12 months out)
 

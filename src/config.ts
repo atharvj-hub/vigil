@@ -94,6 +94,14 @@ const ChecksSchema = z
     // hard rules and the judge can misread (doc 04). Narrow, bounded exception
     // to "Collector is pure observation" (doc 02) — see collector.ts.
     dismissCookieBanners: z.boolean().default(true),
+    // On by default: network-quiet alone is a known-bad readiness signal for
+    // client-rendered apps (Playwright's own docs discourage networkidle) —
+    // there's often a silent gap where the JS bundle has loaded and gone
+    // quiet but is still parsing/mounting, so a capture keyed on network
+    // traffic alone can catch an empty shell before or after the real
+    // content, in either direction (see collector.ts). Waits for the
+    // rendered text to actually stop changing before capturing.
+    domStabilityWait: z.boolean().default(true),
     // Data-fidelity (opt-in, off by default): does a named content field's
     // value — read from a first-party JSON response matching apiPathPatterns —
     // actually appear in the rendered page text? Catches the backend-returns-
