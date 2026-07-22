@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "fixture-app",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "fixture"],
+      "port": 8787
+    }
+  ]
+}
