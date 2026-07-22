@@ -187,6 +187,79 @@ describe("renderHtml", () => {
     expect(html).toContain("Unjudged — model budget exhausted");
     expect(html).toContain("Unjudged — judge error: provider unavailable");
   });
+
+  it("renders a status filter with per-status counts, and tags every row/detail so it can filter", async () => {
+    const html = await renderHtml(result());
+    expect(html).toContain('data-filter="all">All <b>3</b>');
+    expect(html).toContain('data-filter="fail"');
+    expect(html).toContain('data-filter="warn"');
+    expect(html).toContain('data-filter="pass"');
+    // Every row carries the status the filter keys off — without this the
+    // buttons render but filter nothing.
+    expect(html).toContain('data-status="fail"');
+    expect(html).toContain('data-status="warn"');
+    expect(html).toContain('data-status="pass"');
+  });
+
+  it("omits filter buttons for statuses no page has (a filter that shows nothing is noise)", async () => {
+    const html = await renderHtml(result());
+    expect(html).not.toContain('data-filter="skipped"');
+  });
+
+  it("buckets settle timing into fast / moderate / slow", async () => {
+    const slow = (ms: number) => {
+      const s = emptySignals();
+      s.document.settledMs = ms;
+      return s;
+    };
+    const page = (path: string, settledMs: number) => ({
+      url: `https://app.example.com${path}`,
+      source: "sitemap" as const,
+      status: "pass" as const,
+      headline: "clean",
+      decidedBy: "hard-rule" as const,
+      retried: false,
+      flaky: false,
+      signals: slow(settledMs),
+      timings: { visitMs: 1 },
+      cost: { judgeUsd: 0, flowsUsd: 0 },
+    });
+    const html = await renderHtml(
+      result({ pages: [page("/quick", 900), page("/mid", 3200), page("/crawling", 7400)] })
+    );
+    expect(html).toContain("Settle timing");
+    expect(html).toContain("under 2s");
+    expect(html).toContain("2–5s");
+    expect(html).toContain("over 5s");
+    expect(html).toContain("900ms");
+    expect(html).toContain("3200ms");
+    expect(html).toContain("7400ms");
+  });
+
+  it("notes pages that never produced a document rather than silently dropping them", async () => {
+    const noDoc = emptySignals();
+    noDoc.document.settledMs = null;
+    const html = await renderHtml(
+      result({
+        pages: [
+          {
+            url: "https://app.example.com/dead",
+            source: "sitemap",
+            status: "fail",
+            headline: "navigation failed",
+            decidedBy: "hard-rule",
+            hardRule: "H1",
+            retried: true,
+            flaky: false,
+            signals: noDoc,
+            timings: { visitMs: 1 },
+            cost: { judgeUsd: 0, flowsUsd: 0 },
+          },
+        ],
+      })
+    );
+    expect(html).toContain("never produced a document");
+  });
 });
 
 describe("formatting helpers", () => {

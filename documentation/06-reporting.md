@@ -46,12 +46,23 @@ URIs) so it can be attached anywhere — CI artifact, email, ticket — and open
 
 ### The HTML report, top to bottom
 1. Verdict banner + one-line summary + run metadata (target, git SHA if provided, duration,
-   pages visited, model spend).
-2. Page table: status, URL, headline finding, discovery source. Reds pinned to top.
-3. Per-red detail: the evidence in plain words ("POST /api/payment/intent returned 500; page
+   pages visited, model spend, judged/unjudged split).
+2. **Settle timing** — every page bucketed by how long it took to settle: fast (under 2s),
+   moderate (2–5s), slow (over 5s), each bucket listing its pages with exact milliseconds,
+   slowest first. Settle time turned out to be the sharpest predictor of whether a capture
+   caught the real page (doc 04: pages settling fast held full content, pages settling slow were
+   still booting), so surfacing the distribution makes a target's responsiveness legible at a
+   glance and makes a creeping regression across a deploy visible without diffing raw numbers.
+   Pages that never produced a document are counted in a note rather than dropped.
+3. Page table: status, URL, headline finding, discovery source. Reds pinned to top. A **status
+   filter** above the table (All / FAIL / WARN / PASS / SKIP, each with its count) narrows the
+   table *and* the detail blocks below to one status — the fast path on a large run when you
+   only care about the reds. Buttons only appear for statuses the run actually produced. The
+   filter is progressive enhancement: with scripting off the table still lists every page.
+4. Per-red detail: the evidence in plain words ("POST /api/payment/intent returned 500; page
    shows an error toast"), the screenshot (and retry screenshot), the failing requests, the
    console excerpt, the judge's cited reasons and confidence.
-4. Per-yellow detail: collapsed, same structure.
+5. Per-yellow detail: collapsed, same structure.
 
 ### `summary.md` example
 
