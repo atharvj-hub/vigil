@@ -36,6 +36,7 @@ export interface Signals {
     settledMs: number | null;
   };
   requests: RequestSummary[];           // every request on the visit
+  captureTimeline: CaptureTimelineEvent[]; // bounded readiness trace, timestamps relative to navigation
   console: ConsoleEntry[];              // errors only, deduped, capped
   pageErrors: string[];                 // uncaught exceptions (message + stack head)
   crashed: boolean;

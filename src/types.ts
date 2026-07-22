@@ -63,6 +63,34 @@ export interface ConsoleEntry {
   count: number; // dedupe counter
 }
 
+/**
+ * A bounded, relative-time trace of the collector's readiness decision. It is
+ * diagnostic evidence: timestamps are milliseconds from navigation start.
+ */
+export type CaptureTimelineEvent =
+  | {
+      kind: "navigation-start" | "domcontentloaded" | "load" | "network-quiet" | "network-quiet-timeout" | "dom-stable" | "capture-decision" | "capture" | "navigation-error";
+      atMs: number;
+      detail?: string;
+    }
+  | {
+      kind: "fingerprint";
+      atMs: number;
+      inFlight: number;
+      textLength: number;
+      childElementCount: number;
+      spinnerVisible: boolean;
+      visibleHeadingCount: number;
+      readyState: string;
+    }
+  | {
+      kind: "request-complete";
+      atMs: number;
+      resourceType: string;
+      status: number | null;
+      failure?: string;
+    };
+
 export interface FlowOutcome {
   name: string;
   steps: { instruction: string; ok: boolean; detail: string }[];
@@ -80,6 +108,7 @@ export interface Signals {
     settledMs: number | null;
   };
   requests: RequestSummary[]; // every request on the visit
+  captureTimeline: CaptureTimelineEvent[]; // bounded readiness trace for this capture
   console: ConsoleEntry[]; // errors only, deduped, capped
   pageErrors: string[]; // uncaught exceptions (message + stack head)
   crashed: boolean;

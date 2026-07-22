@@ -218,6 +218,24 @@ function fidelityEvidence(warnings: string[] | undefined): string {
 function signalEvidence(s: Signals): string {
   const blocks: string[] = [];
 
+  if (s.captureTimeline.length) {
+    const items = s.captureTimeline
+      .map((event) => {
+        const time = `<span class="tag">${event.atMs}ms</span>`;
+        if (event.kind === "fingerprint") {
+          return `<li>${time} DOM sample: ${event.textLength} chars, ${event.childElementCount} elements, ` +
+            `${event.visibleHeadingCount} headings, ${event.spinnerVisible ? "spinner visible" : "no spinner"}, ` +
+            `${event.inFlight} in flight (${esc(event.readyState)})</li>`;
+        }
+        if (event.kind === "request-complete") {
+          return `<li>${time} request complete: ${esc(event.resourceType)} → ${event.status ?? esc(event.failure ?? "failed")}</li>`;
+        }
+        return `<li>${time} ${esc(event.kind.replaceAll("-", " "))}${event.detail ? `: ${esc(event.detail)}` : ""}</li>`;
+      })
+      .join("");
+    blocks.push(`<div class="evi"><h4>Capture timeline</h4><ol>${items}</ol></div>`);
+  }
+
   const badReq = s.requests.filter((r) => r.status === null || (r.status ?? 0) >= 400);
   if (badReq.length) {
     const items = badReq

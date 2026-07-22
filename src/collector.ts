@@ -38,7 +38,7 @@
 // those cases without a full DOM diff.
 
 import type { Browser, Request } from "playwright";
-import type { Signals, RequestSummary, ConsoleEntry } from "./types.js";
+import type { Signals, RequestSummary, ConsoleEntry, CaptureTimelineEvent } from "./types.js";
 
 const LOAD_CAP_MS = 15_000;
 const QUIET_WINDOW_MS = 750;
@@ -59,6 +59,8 @@ const MAX_FIDELITY_BODY_BYTES = 500_000; // only a couple of named scalar fields
 // to be ready, which never resolves while a resource hangs — so without a bound
 // it burns its full 30s default on any slow page and blows the per-page budget.
 const SCREENSHOT_CAP_MS = 10_000;
+const MAX_TIMELINE_REQUESTS = 60;
+const MAX_TIMELINE_FINGERPRINTS = 60;
 
 // Resource types exempt from the network-quiet count (long-lived by nature).
 const QUIET_EXEMPT = new Set(["websocket", "eventsource"]);
@@ -178,9 +180,22 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
 
   const page = await context.newPage();
 
+  // The final report needs to answer "why did we capture here?", without
+  // turning every visit into an unbounded browser trace. Keep the useful
+  // readiness evidence: lifecycle milestones, a sample at every DOM-stability
+  // poll, and a capped number of request completions.
+  const captureTimeline: CaptureTimelineEvent[] = [];
+  let navStart = started;
+  let timelineRequests = 0;
+  let timelineFingerprints = 0;
+  const trace = (event: CaptureTimelineEvent) => captureTimeline.push(event);
+  const atNavigation = () => Math.max(0, Date.now() - navStart);
+
   // ── Listeners attached BEFORE navigation ──
   let crashed = false;
   page.on("crash", () => (crashed = true));
+  page.on("domcontentloaded", () => trace({ kind: "domcontentloaded", atMs: atNavigation() }));
+  page.on("load", () => trace({ kind: "load", atMs: atNavigation() }));
 
   const pageErrors: string[] = [];
   page.on("pageerror", (err) => {
@@ -271,6 +286,10 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
       slow: durationMs > opts.latencyBudgetMs,
       afterSettle: Date.now() > settledAt,
     });
+    if (timelineRequests < MAX_TIMELINE_REQUESTS) {
+      timelineRequests++;
+      trace({ kind: "request-complete", atMs: atNavigation(), resourceType: req.resourceType(), status, failure });
+    }
   };
   page.on("requestfinished", (req) => void finalize(req));
   page.on("requestfailed", (req) => void finalize(req, req.failure()?.errorText ?? "request failed"));
@@ -282,7 +301,8 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
   let loadMs: number | null = null;
   let timedOut = false;
 
-  const navStart = Date.now();
+  navStart = Date.now();
+  trace({ kind: "navigation-start", atMs: 0 });
   let response: import("playwright").Response | null = null;
   try {
     // "commit" resolves as soon as the server responds and navigation commits,
@@ -292,6 +312,7 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
     response = await page.goto(url, { waitUntil: "commit", timeout: LOAD_CAP_MS });
   } catch (err) {
     navigationError = firstLine(err instanceof Error ? err.message : String(err));
+    trace({ kind: "navigation-error", atMs: atNavigation(), detail: navigationError });
   }
 
   if (response) {
@@ -310,10 +331,22 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
   let settledMs: number | null = null;
   if (navigationError === undefined) {
     if (opts.dismissCookieBanners && !crashed) await dismissCookieBanner(page);
-    await waitForNetworkQuiet(() => inFlight, () => elapsed(started) > opts.perPageVisitMs);
+    const quietResult = await waitForNetworkQuiet(() => inFlight, () => elapsed(started) > opts.perPageVisitMs);
+    trace({
+      kind: quietResult === "quiet" ? "network-quiet" : "network-quiet-timeout",
+      atMs: atNavigation(),
+      detail: quietResult === "budget" ? "page visit budget reached" : undefined,
+    });
+    let domResult = "disabled";
     if (opts.domStabilityWait && !crashed) {
-      await waitForDomStable(page, () => elapsed(started) > opts.perPageVisitMs);
+      domResult = await waitForDomStable(page, () => elapsed(started) > opts.perPageVisitMs, (fingerprint) => {
+        if (timelineFingerprints >= MAX_TIMELINE_FINGERPRINTS) return;
+        timelineFingerprints++;
+        trace({ kind: "fingerprint", atMs: atNavigation(), inFlight, ...fingerprint });
+      });
+      if (domResult === "stable") trace({ kind: "dom-stable", atMs: atNavigation() });
     }
+    trace({ kind: "capture-decision", atMs: atNavigation(), detail: `network=${quietResult}; dom=${domResult}` });
     await page.waitForTimeout(PAINT_GRACE_MS);
     settledMs = Date.now() - navStart;
     if (elapsed(started) > opts.perPageVisitMs) timedOut = true;
@@ -392,6 +425,7 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
       // (fonts never ready) can't stall the whole visit on its 30s default.
       const remaining = opts.perPageVisitMs - elapsed(started);
       const timeout = Math.max(2000, Math.min(SCREENSHOT_CAP_MS, remaining));
+      trace({ kind: "capture", atMs: atNavigation(), detail: `screenshot timeout ${timeout}ms` });
       await page.screenshot({ path: opts.screenshotPath, timeout, animations: "disabled" });
     } catch {
       /* screenshot best-effort — a page too broken to snapshot is already flagged */
@@ -411,6 +445,7 @@ export async function collect(browser: Browser, url: string, opts: CollectOption
       settledMs,
     },
     requests,
+    captureTimeline,
     console: [...consoleMap.values()],
     pageErrors,
     crashed,
@@ -510,44 +545,55 @@ function fingerprintsEqual(a: DomFingerprint, b: DomFingerprint): boolean {
  * catches is the common real case: content still actively mounting/changing
  * right as network-quiet fires.
  */
-async function waitForDomStable(page: import("playwright").Page, budgetExceeded: () => boolean): Promise<void> {
+type DomStabilityResult = "stable" | "max-wait" | "budget" | "unavailable";
+
+async function waitForDomStable(
+  page: import("playwright").Page,
+  budgetExceeded: () => boolean,
+  onFingerprint: (fingerprint: DomFingerprint) => void
+): Promise<DomStabilityResult> {
   const start = Date.now();
   let last: DomFingerprint | null = null;
   let unchangedSince: number | null = null;
   while (Date.now() - start < DOM_STABLE_MAX_MS) {
-    if (budgetExceeded()) return;
+    if (budgetExceeded()) return "budget";
     let current: DomFingerprint;
     try {
       current = await readDomFingerprint(page, SPINNER_SELECTOR);
     } catch {
-      return;
+      return "unavailable";
     }
+    onFingerprint(current);
     if (last && fingerprintsEqual(current, last)) {
       if (unchangedSince === null) unchangedSince = Date.now();
       // Stable AND actually rendered → settled. Stable but still empty or
       // spinning → treat as not-yet-rendered and keep waiting to the cap.
-      else if (Date.now() - unchangedSince >= DOM_STABLE_WINDOW_MS && !looksUnrendered(current)) return;
+      else if (Date.now() - unchangedSince >= DOM_STABLE_WINDOW_MS && !looksUnrendered(current)) return "stable";
     } else {
       last = current;
       unchangedSince = null;
     }
     await new Promise((r) => setTimeout(r, DOM_STABLE_POLL_MS));
   }
+  return "max-wait";
 }
 
-async function waitForNetworkQuiet(inFlight: () => number, budgetExceeded: () => boolean): Promise<void> {
+type NetworkQuietResult = "quiet" | "max-wait" | "budget";
+
+async function waitForNetworkQuiet(inFlight: () => number, budgetExceeded: () => boolean): Promise<NetworkQuietResult> {
   const start = Date.now();
   let quietSince: number | null = null;
   while (Date.now() - start < QUIET_MAX_MS) {
-    if (budgetExceeded()) return;
+    if (budgetExceeded()) return "budget";
     if (inFlight() <= QUIET_INFLIGHT_MAX) {
       if (quietSince === null) quietSince = Date.now();
-      else if (Date.now() - quietSince >= QUIET_WINDOW_MS) return;
+      else if (Date.now() - quietSince >= QUIET_WINDOW_MS) return "quiet";
     } else {
       quietSince = null;
     }
     await new Promise((r) => setTimeout(r, 50));
   }
+  return "max-wait";
 }
 
 const elapsed = (since: number) => Date.now() - since;

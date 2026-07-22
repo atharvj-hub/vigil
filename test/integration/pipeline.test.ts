@@ -122,6 +122,12 @@ describe("targeted single-page checks", () => {
     const vigil = await Vigil.create({ report: { dir: reportDir }, model: { judge: false } }, base);
     const p = await vigil.checkPage("/spa-slow-render");
     expect(p.signals.render.textSample).toContain("Real content has finally rendered here");
+    // The trace makes an otherwise opaque readiness decision inspectable:
+    // it records both the samples that led to it and the final decision.
+    const timeline = p.signals.captureTimeline;
+    expect(timeline.some((event) => event.kind === "network-quiet")).toBe(true);
+    expect(timeline.some((event) => event.kind === "fingerprint")).toBe(true);
+    expect(timeline.find((event) => event.kind === "capture-decision")?.detail).toContain("dom=stable");
   });
 
   it("checks.domStabilityWait: false captures before the delayed content mounts (opt-out honored)", async () => {

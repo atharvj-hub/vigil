@@ -39,6 +39,7 @@ function emptySignals(): any {
     finalUrl: "https://app.example.com",
     document: { status: 200, redirects: [], loadMs: 100, settledMs: 200 },
     requests: [],
+    captureTimeline: [],
     console: [],
     pageErrors: [],
     crashed: false,

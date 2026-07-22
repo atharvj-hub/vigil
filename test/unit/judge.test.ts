@@ -31,6 +31,7 @@ function signals(screenshotPath: string, over: Partial<Signals> = {}): Signals {
     finalUrl: "https://app.example.com/checkout",
     document: { status: 200, redirects: [], loadMs: 400, settledMs: 900 },
     requests: [],
+    captureTimeline: [],
     console: [],
     pageErrors: [],
     crashed: false,

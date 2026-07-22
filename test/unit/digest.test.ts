@@ -8,6 +8,7 @@ function signals(over: Partial<Signals> = {}): Signals {
     finalUrl: "https://app.example.com/",
     document: { status: 200, redirects: [], loadMs: 400, settledMs: 900 },
     requests: [],
+    captureTimeline: [],
     console: [],
     pageErrors: [],
     crashed: false,

@@ -466,6 +466,7 @@ function emptySignals(url: string): Signals {
     finalUrl: url,
     document: { status: null, redirects: [], loadMs: null, settledMs: null },
     requests: [],
+    captureTimeline: [],
     console: [],
     pageErrors: [],
     crashed: false,

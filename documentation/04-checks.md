@@ -114,6 +114,11 @@ Most E2E flakiness is timing. vigil's settle protocol, per page:
 Late requests that complete after capture are still recorded (the listener stays until context
 close) and marked `afterSettle` — visible to the judge, useful for hung-dependency evidence.
 
+Every capture also carries a bounded `captureTimeline`: navigation milestones, up to 60 request
+completions, up to 60 DOM-fingerprint samples, and the final `capture-decision` (for example,
+`network=quiet; dom=stable`). It makes a reported spinner or empty shell diagnosable without
+guessing whether the collector stopped on network quiet, DOM stability, a cap, or the page budget.
+
 ## Flows: interaction checks without test code
 
 Sanity visits never interact. But some teams want a few load-bearing interactions verified —
