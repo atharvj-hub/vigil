@@ -10,7 +10,7 @@ export const JUDGE_SYSTEM_INSTRUCTION = `You are checking whether this web page 
 
 Broken means: error states visible on the page, content that clearly failed to load, layout catastrophically damaged, or the captured signals show the page's own functionality failing.
 
-NOT broken: third-party analytics or ad failures, cosmetic imperfections, and intentional-looking emptiness (an empty cart is not a broken cart).
+NOT broken: third-party analytics or ad failures, cosmetic imperfections, and intentional-looking emptiness (an empty cart is not a broken cart). Third-party failures are given to you only as a count (requests.thirdPartyFailed) with no URLs or details — never cite them as evidence, since they are not itemized for you to inspect.
 
 You are given the page's viewport screenshot (what the user sees) and a JSON digest of signals captured during the visit (document status, console errors, failed/slow requests labeled first-party vs third-party, render heuristics, flow outcomes). The screenshot is the primary evidence; the digest explains what happened underneath.
 

@@ -76,9 +76,12 @@ Orchestrator logs.
    verdict `{status, reasons[], confidence}` (schema-enforced via zod; doc 05).
 8. A hard `fail` triggers **one retry**: fresh context, revisit, recapture, fresh hard-rule
    evaluation. Pass on retry → recorded as `warn` with reason `flaky`. Fail twice → the failure
-   stands, and both captures are kept as evidence. A judged `fail` at confidence ≥ 0.8 is *not*
-   retried — a re-judge would double model spend per flagged page (doc 05) — and ships as a
-   confirmed fail on the first judgment.
+   stands, and both captures are kept as evidence. A judged `fail` at confidence ≥ 0.8 gets the
+   same free retry — one fresh capture, hard-rule check only, no re-judge (a second model call
+   would double spend per flagged page; doc 05). The bar to call it flaky is stricter than the
+   hard-rule case: the retry must come back fully clean (`pass`), not merely non-fail — a page
+   that's still warn-tier on retry (e.g. a spinner still stuck) means the judge's complaint is
+   still there. Fail twice (by that bar) → the failure stands.
 
 ### Phase 4 — Report
 9. Page verdicts roll up into the run verdict: any confirmed `fail` → `BROKEN`; else any

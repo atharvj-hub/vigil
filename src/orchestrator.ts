@@ -328,17 +328,41 @@ export class Vigil {
       } else {
         decidedBy = "judge";
         judgeVerdict = attempt.verdict;
-        const policy = applyPolicy(attempt.verdict);
+        const policy = applyPolicy(attempt.verdict, {
+          textLength: signals.render.textLength,
+          screenshotLooksBlank: signals.render.screenshotLooksBlank,
+        });
 
         if (policy.kind === "warn") {
           decision = { status: "warn", headline: policy.headline, warnReasons: decision.warnReasons };
         } else if (policy.kind === "candidate-fail") {
-          // Retry/re-judge disabled for cost: a second judge call would double
-          // API billing per candidate fail. The confidence gate (verdictPolicy)
-          // is the only firewall now — a candidate-fail ships as a confirmed
-          // fail on the first judgment. Revisit if false-positive rate proves
-          // too high in practice (roadmap open question).
-          decision = { status: "fail", headline: policy.headline, warnReasons: [] };
+          // Free retry for flakiness — mirrors the hard-rule retry protocol:
+          // one fresh capture, evaluated by hard rules only. No re-judge — a
+          // second model call would double judge spend on every candidate
+          // fail, and the confidence gate is meant to be the cost firewall,
+          // not a second API call. Stricter than the hard-rule retry though:
+          // the retry must come back fully clean (`pass`), not just
+          // "not fail" — a page that's still warn-tier (e.g. a spinner still
+          // stuck) means whatever the judge flagged is still there, not
+          // flaky. Applies to every site, not tuned to any one target.
+          retried = true;
+          retrySignals = await collect(browser, page.url, {
+            ...opts,
+            screenshotPath: join(pagesDir, `${slug}.retry.png`),
+          });
+          const retryDecision = evaluateRules(retrySignals);
+          if (retryDecision.status === "pass") {
+            flaky = true;
+            decision = {
+              status: "warn",
+              headline: `passed on retry (flaky): ${policy.headline}`,
+              warnReasons: [
+                "flaky — judge flagged this on the first visit, retry's deterministic signals came back fully clean",
+              ],
+            };
+          } else {
+            decision = { status: "fail", headline: policy.headline, warnReasons: [] };
+          }
         } else if (decision.status !== "pass") {
           // Judge pass over a deterministic warn: the judge saw the warn-tier
           // evidence in the digest and cleared it. Status follows the judge

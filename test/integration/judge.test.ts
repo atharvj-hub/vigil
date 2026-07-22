@@ -111,17 +111,37 @@ describe("judge stage — full pipeline with a mock model", () => {
     expect(r.cost.modelUsd).toBeLessThanOrEqual(2.0); // the default cap, invariant 5
   }, 60_000);
 
-  it("a confident judged fail is a confirmed fail on the first judgment — no re-judge call", async () => {
+  it("a confident judged fail gets one free recapture; a clean retry downgrades it to flaky warn — no re-judge call", async () => {
+    // /about is a genuinely clean fixture page, so the free retry capture
+    // comes back fully clean by hard rules — the judge's complaint doesn't
+    // reproduce, so it's flaky, not confirmed.
     const model = mockJudge(forPath(() => fail(0.9)));
     const r = await run(["/about"], model);
     const p = byPath(r, "/about")!;
+    expect(r.verdict).toBe("DEGRADED");
+    expect(p.status).toBe("warn");
+    expect(p.decidedBy).toBe("judge");
+    expect(p.retried).toBe(true);
+    expect(p.retrySignals).toBeDefined();
+    expect(p.headline).toContain("passed on retry (flaky)");
+    expect(p.judge?.status).toBe("fail");
+    expect(r.cost.modelCalls).toBe(2); // "/" + the one /about judgment — no confirming re-judge
+  }, 60_000);
+
+  it("a confident judged fail stays a confirmed fail when the retry capture isn't clean — still no re-judge call", async () => {
+    // /apifail deterministically reproduces a first-party API failure on
+    // every visit, so the free retry capture comes back warn, not pass —
+    // whatever the judge flagged is still there, so it's not flaky.
+    const model = mockJudge(forPath(() => fail(0.9), "/apifail"));
+    const r = await run(["/apifail"], model);
+    const p = byPath(r, "/apifail")!;
     expect(r.verdict).toBe("BROKEN");
     expect(p.status).toBe("fail");
     expect(p.decidedBy).toBe("judge");
-    expect(p.retried).toBe(false);
-    expect(p.retrySignals).toBeUndefined();
+    expect(p.retried).toBe(true);
+    expect(p.retrySignals).toBeDefined();
     expect(p.judge?.status).toBe("fail");
-    expect(r.cost.modelCalls).toBe(2); // "/" + the one /about judgment — no confirming re-judge
+    expect(r.cost.modelCalls).toBe(2); // "/" + the one /apifail judgment — no confirming re-judge
   }, 60_000);
 
   it("a low-confidence fail is a warn, never retried, never red", async () => {

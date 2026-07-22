@@ -40,19 +40,22 @@ export interface SignalsDigest {
     total: number;
     failed: number;
     slow: number;
-    // Only failed-or-slow requests are itemized — a healthy request tells the
-    // judge nothing a count doesn't.
+    // Only first-party failed-or-slow requests are itemized — a healthy
+    // request tells the judge nothing a count doesn't, and the prompt
+    // explicitly says third-party failures are NOT broken. Itemizing them
+    // anyway just hands the judge something to (wrongly) cite; a bare count
+    // is all it needs to know they happened.
     notable: {
       method: string;
       url: string;
       status: number | null;
       failure?: string;
       durationMs: number;
-      firstParty: boolean;
       afterSettle: boolean;
       slow: boolean;
     }[];
     omitted: number;
+    thirdPartyFailed: number;
   };
   console: { entries: { text: string; sourceUrl?: string; count: number }[]; omitted: number };
   pageErrors: { entries: string[]; omitted: number };
@@ -78,13 +81,13 @@ export interface SignalsDigest {
 /** Deterministically compress one visit's Signals for the judge. */
 export function buildDigest(signals: Signals, opts: DigestOptions = {}): SignalsDigest {
   const notableAll = signals.requests.filter((r) => r.status === null || (r.status ?? 0) >= 400 || r.slow);
-  const notable = notableAll.slice(0, MAX_REQUESTS).map((r) => ({
+  const firstPartyNotable = notableAll.filter((r) => r.firstParty);
+  const notable = firstPartyNotable.slice(0, MAX_REQUESTS).map((r) => ({
     method: r.method,
     url: truncate(r.url, MAX_LINE),
     status: r.status,
     ...(r.failure !== undefined && { failure: truncate(r.failure, MAX_LINE) }),
     durationMs: r.durationMs,
-    firstParty: r.firstParty,
     afterSettle: r.afterSettle,
     slow: r.slow,
   }));
@@ -116,7 +119,8 @@ export function buildDigest(signals: Signals, opts: DigestOptions = {}): Signals
       failed: signals.requests.filter((r) => r.status === null || (r.status ?? 0) >= 400).length,
       slow: signals.requests.filter((r) => r.slow).length,
       notable,
-      omitted: notableAll.length - notable.length,
+      omitted: firstPartyNotable.length - notable.length,
+      thirdPartyFailed: notableAll.length - firstPartyNotable.length,
     },
     console: { entries: consoleEntries, omitted: signals.console.length - consoleEntries.length },
     pageErrors: { entries: pageErrors, omitted: signals.pageErrors.length - pageErrors.length },

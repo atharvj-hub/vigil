@@ -46,7 +46,7 @@ function req(over: Partial<RequestSummary> = {}): RequestSummary {
 }
 
 describe("buildDigest", () => {
-  it("itemizes only failed-or-slow requests, keeping totals for the rest", () => {
+  it("itemizes only failed-or-slow FIRST-PARTY requests, keeping totals for the rest", () => {
     const d = buildDigest(
       signals({
         requests: [
@@ -60,10 +60,14 @@ describe("buildDigest", () => {
     expect(d.requests.total).toBe(4);
     expect(d.requests.failed).toBe(2);
     expect(d.requests.slow).toBe(1);
-    expect(d.requests.notable).toHaveLength(3);
+    // Only the two first-party notable requests are itemized — the
+    // third-party failure is collapsed into thirdPartyFailed instead, since
+    // the judge is told (prompt.ts) that third-party failures are not
+    // "broken" and shouldn't be able to cite one as evidence.
+    expect(d.requests.notable).toHaveLength(2);
     expect(d.requests.notable.map((r) => r.url)).not.toContain("https://app.example.com/api/x");
-    // First/third-party labels come straight from Signals — never recomputed.
-    expect(d.requests.notable.find((r) => r.url.includes("thirdparty"))!.firstParty).toBe(false);
+    expect(d.requests.notable.some((r) => r.url.includes("thirdparty"))).toBe(false);
+    expect(d.requests.thirdPartyFailed).toBe(1);
   });
 
   it("caps every array and reports the omitted count", () => {

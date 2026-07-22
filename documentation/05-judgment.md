@@ -61,7 +61,7 @@ concrete evidence for every reason; if the evidence is ambiguous, prefer `warn` 
 |---|---|
 | `pass` | pass |
 | `warn` (any confidence) | warn — yellow, non-gating by default |
-| `fail`, confidence ≥ 0.8 | confirmed fail — no re-judge (cost) |
+| `fail`, confidence ≥ 0.8 | candidate fail — one free retry (below), no re-judge (cost) |
 | `fail`, confidence < 0.8 | warn, annotated `low-confidence` — a human look is requested, the pipeline is not blocked |
 
 ## The retry protocol (hard rules only; replacing flake machinery)
@@ -73,16 +73,19 @@ capture, fresh hard-rule evaluation.
   deploys, but they're never silent either.
 - **Fail twice** → the failure stands. Both captures ship in the report.
 
-This is the entire flake system for deterministic failures. No strikes, no quarantine, no
-signature lists — those exist to manage *persistently stored* flaky tests, and vigil has none.
+A judged `fail` at confidence ≥ 0.8 gets the same free retry — one fresh capture, evaluated by
+hard rules only, no second model call (a re-judge would double the model spend on every page the
+judge flags, and per-run cost is a first-class constraint; doc 09). The bar is stricter than the
+hard-rule case, though: the retry must come back fully clean (`pass`), not merely "not fail" — a
+page that's still warn-tier on retry (e.g. a spinner still stuck, a first-party request still
+failing) means whatever the judge flagged is still there, so it stays a confirmed fail. This is
+deliberately general — it isn't tuned to any one target site, and it caught a real case: a live
+site's homepage judged `fail` (stuck loading spinner on first visit) turned out to be a slow,
+racy load rather than a broken page — recaptured clean on retry, recorded `flaky`, no extra spend.
 
-A judged `fail` at confidence ≥ 0.8 is **not** retried — a re-judge would double the model spend
-on every page the judge flags, and per-run cost is a first-class constraint (doc 09). The
-confidence gate is the only firewall for judged fails: it ships as a confirmed fail on the first
-judgment. This trades away the flake-recovery safety net for judged fails specifically; if
-dogfooding shows the false-positive rate is too high without it, a cheaper reconfirmation (e.g.
-re-running only the hard rules on a fresh capture, no second model call) is the fallback to
-revisit before reinstating a full re-judge (roadmap open question).
+This is the entire flake system, for both hard-rule and judged failures. No strikes, no
+quarantine, no signature lists — those exist to manage *persistently stored* flaky tests, and
+vigil has none.
 
 ## The environmental override
 
@@ -139,8 +142,9 @@ rendered text = 0. H4 fires. Hard fail, retried, fails again → `fail`, evidenc
 
 **B. Payment API degraded.** `/checkout` renders, but signals show `POST /api/payment/intent`
 → 500 (first-party) and the screenshot shows an error toast. Judge: `fail`, confidence 0.97,
-reasons cite the 500 and the visible toast. Confidence clears the gate → BROKEN immediately, no
-re-judge call.
+reasons cite the 500 and the visible toast. Confidence clears the gate → free retry capture; the
+API is still failing, so the retry is warn-tier at best, not clean → confirmed fail, BROKEN. No
+re-judge call either way — the retry is a hard-rule check only.
 
 **C. Marketing reworded the homepage.** No stored baseline exists to disagree with. Signals
 clean, screenshot looks like a normal homepage → `pass`. The entire class of "the app changed,
