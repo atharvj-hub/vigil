@@ -99,6 +99,19 @@ const routes = {
        }, 1400);
      </script>`
   ),
+  // The production bug found on a real client-rendered site: the shell is
+  // COMPLETELY empty (0 chars) and perfectly static while the framework
+  // bootstraps, then content appears well after the stability window would
+  // otherwise have declared it settled. Without the looksUnrendered guard in
+  // collector.ts the empty shell reads as "stable" and gets captured at ~2s,
+  // producing a false H4 blank-render fail on a page that is entirely healthy.
+  "/spa-empty-shell": html("SPA", `<div id="root"></div>
+     <script>
+       setTimeout(() => {
+         document.getElementById('root').textContent =
+           'The application finally finished bootstrapping and rendered its real content here.';
+       }, 3000);
+     </script>`),
   // Same idea, but the "before" and "after" text are the SAME length (both
   // exactly 28 chars, verified) — the exact class of change plain
   // text-length stability would miss: a spinner (class="spinner") is

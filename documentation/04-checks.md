@@ -90,13 +90,23 @@ Most E2E flakiness is timing. vigil's settle protocol, per page:
    little longer reads as falsely healthy (a judge pass on a half-rendered shell). Server-
    rendered pages are unaffected — their text (and the rest of the fingerprint) is complete on
    first paint, so this returns immediately.
-   **A known limit, not a bug:** this is a heuristic, and it cannot distinguish "settled, nothing
-   left to render" from "hasn't started rendering yet" for content that changes only once, long
-   after an otherwise-static initial paint — no passive observation can, without knowing the
-   future. What it reliably catches is content still actively mounting/changing right as
-   network-quiet fires, which is the common real case. A fuller DOM diff/fingerprint (or a
-   framework-specific "app ready" hook) would close more of this gap; not implemented here to
-   keep the check cheap and framework-agnostic.
+   **The not-yet-rendered guard.** A stable fingerprint alone is ambiguous: a client-rendered
+   app serves a static empty shell before it boots, and that shell is *perfectly stable* — the
+   window happily declares it settled. Dogfooding a real SPA showed this producing false
+   `BROKEN` verdicts: pages captured at ~2.3s with 0 chars (H4 blank-render fail) that were
+   entirely healthy and finished rendering by ~4s. The signal was unmistakable — every page that
+   settled at ~2s had 0–23 chars, every page that settled at ~4s had full content, with nothing
+   in between. So a fingerprint that is stable *but* still shows a spinner or under 40 chars of
+   text (matching H4's own blank threshold) is treated as **not yet rendered** rather than
+   settled, and the wait continues to the cap.
+   A genuinely blank page still hard-fails H4 — the guard delays that verdict by at most the
+   remaining cap, it never suppresses it. That trade is deliberate: a false `BROKEN` on a healthy
+   slow-booting app costs far more trust than a few extra seconds spent confirming a page really
+   is dead.
+   **The residual limit:** for content that changes exactly once, long after an otherwise-static
+   *non-empty* paint, no passive observation can tell "settled" from "not started" without
+   knowing the future. A framework-specific "app ready" hook would close that remainder; not
+   implemented here to keep the check cheap and framework-agnostic.
 5. Then a fixed 250ms paint grace, animations disabled via `prefers-reduced-motion` emulation
    and CSS injection.
 6. Capture. Total worst case ≈ 34s, typical ≈ 2–4s.

@@ -47,6 +47,10 @@ const QUIET_INFLIGHT_MAX = 2;
 const DOM_STABLE_POLL_MS = 200;
 const DOM_STABLE_WINDOW_MS = 500;
 const DOM_STABLE_MAX_MS = 8_000;
+// Below this, a "stable" fingerprint is treated as not-yet-rendered rather
+// than settled (see looksUnrendered). Matches hard rule H4's blank threshold
+// so the two agree on what "effectively empty" means.
+const MIN_RENDERED_TEXT = 40;
 const PAINT_GRACE_MS = 250;
 const MAX_CONSOLE = 20;
 const MAX_TEXT_SAMPLE = 2_000; // bounded rendered-text sample for data-fidelity matching — never the full body
@@ -464,6 +468,23 @@ async function readDomFingerprint(page: import("playwright").Page, spinnerSelect
   }, spinnerSelector);
 }
 
+/**
+ * Is this fingerprint consistent with "the app hasn't rendered yet" rather
+ * than "the app settled and this is genuinely the page"? A client-rendered
+ * app serves a static empty shell first, and that shell is *perfectly stable*
+ * — the stability window alone happily declares it settled, which is the
+ * heuristic's blind spot (it can't tell "done" from "not started"). Weighting
+ * an empty/spinner state as not-yet-rendered resolves that ambiguity in the
+ * safe direction: keep waiting up to the cap instead of capturing a shell.
+ *
+ * A page that really is blank still hard-fails (H4) — it just takes the full
+ * DOM_STABLE_MAX_MS to say so, which is the right trade: a false BROKEN on a
+ * healthy slow app costs far more than a few seconds on an actually-dead one.
+ */
+function looksUnrendered(fp: DomFingerprint): boolean {
+  return fp.spinnerVisible || fp.textLength < MIN_RENDERED_TEXT;
+}
+
 function fingerprintsEqual(a: DomFingerprint, b: DomFingerprint): boolean {
   return (
     a.textLength === b.textLength &&
@@ -503,7 +524,9 @@ async function waitForDomStable(page: import("playwright").Page, budgetExceeded:
     }
     if (last && fingerprintsEqual(current, last)) {
       if (unchangedSince === null) unchangedSince = Date.now();
-      else if (Date.now() - unchangedSince >= DOM_STABLE_WINDOW_MS) return;
+      // Stable AND actually rendered → settled. Stable but still empty or
+      // spinning → treat as not-yet-rendered and keep waiting to the cap.
+      else if (Date.now() - unchangedSince >= DOM_STABLE_WINDOW_MS && !looksUnrendered(current)) return;
     } else {
       last = current;
       unchangedSince = null;

@@ -137,6 +137,25 @@ describe("targeted single-page checks", () => {
     expect(p.signals.render.textSample).not.toContain("Real content has finally rendered here");
   });
 
+  it("a static empty shell is treated as not-yet-rendered, not settled — no false blank-render fail", async () => {
+    // Regression test for a false BROKEN found dogfooding a real SPA: the
+    // empty pre-bootstrap shell is perfectly stable, so the stability window
+    // alone declared it settled and captured 0 chars → H4 blank-render fail
+    // on a completely healthy page.
+    const vigil = await Vigil.create({ report: { dir: reportDir }, model: { judge: false } }, base);
+    const p = await vigil.checkPage("/spa-empty-shell");
+    expect(p.status).toBe("pass");
+    expect(p.hardRule).toBeUndefined();
+    expect(p.signals.render.textSample).toContain("finally finished bootstrapping");
+  });
+
+  it("a genuinely blank page still hard-fails H4 (the guard delays the verdict, never suppresses it)", async () => {
+    const vigil = await Vigil.create({ report: { dir: reportDir }, model: { judge: false } }, base);
+    const p = await vigil.checkPage("/blank");
+    expect(p.status).toBe("fail");
+    expect(p.hardRule).toBe("H4");
+  });
+
   it("the stability fingerprint catches a same-length spinner→content swap that text length alone would miss", async () => {
     const vigil = await Vigil.create({ report: { dir: reportDir }, model: { judge: false } }, base);
     const p = await vigil.checkPage("/spa-same-length-swap");

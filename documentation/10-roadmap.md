@@ -67,9 +67,12 @@ Phase 2 implements the full AI verdict layer behind a single orchestrator seam, 
    as the cheapest set that catches common same-length UI swaps (skeleton→cards, spinner→SVG).
    It still can't catch every same-length, same-element-count, spinner-free swap (e.g. an image
    gallery finishing its loads with no DOM structure change) or a single very-late change
-   preceded by total silence (the heuristic's fundamental blind spot; doc 04). A fuller DOM
+   preceded by total silence (the heuristic's residual blind spot; doc 04). A fuller DOM
    diff/mutation-count signal or a framework-specific "app ready" hook would close more of this,
    at more implementation cost — revisit if dogfooding surfaces a real miss.
+   *Update:* the highest-impact half of this — a stable but *empty* shell being read as settled —
+   is closed by the not-yet-rendered guard (doc 04), added after it caused real false `BROKEN`
+   verdicts on a live SPA. What remains is the non-empty single-late-change case.
 
 ## Open research issues
 
