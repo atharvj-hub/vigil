@@ -60,18 +60,24 @@ export function buildSummary(result: RunResult): string {
 
 // doc 06: format page summary lines with judge confidence or explicit unjudged reason.
 // p.headline (built by the orchestrator's unjudgedWarn) already states *that*
-// a page went unjudged; this only appends the technical *why* for the error
-// case, since that detail lives solely in p.judgeError. A plain trailing
-// clause — never string-slicing/reconstructing p.headline — so it can't
-// produce garbled output regardless of what characters judgeError contains.
+// a page went unjudged; the technical *why* lives solely in p.judgeError and
+// has to be appended separately — every caller that prints a page's headline
+// needs this same check, or the *why* silently disappears for that caller (as
+// happened to the `vigil check` CLI command, which reimplemented a subset of
+// this by hand and dropped the reason clause).
+export function judgeErrorReason(p: PageResult): string | undefined {
+  return p.decidedBy === "error" && p.judgeError ? p.judgeError : undefined;
+}
+
 function formatSummaryLine(p: PageResult): string {
   const mark = { fail: "❌", warn: "⚠️", pass: "✅", skipped: "⏭️" }[p.status];
   let headline = p.headline;
 
   if (p.decidedBy === "judge" && p.judge && !headline.includes("low confidence")) {
     headline += ` (judge ${p.judge.confidence})`;
-  } else if (p.decidedBy === "error" && p.judgeError) {
-    headline = `${headline} — reason: ${p.judgeError}`;
+  } else {
+    const reason = judgeErrorReason(p);
+    if (reason) headline = `${headline} — reason: ${reason}`;
   }
 
   return `${mark} **${pathOf(p.url)}** — ${headline}`;

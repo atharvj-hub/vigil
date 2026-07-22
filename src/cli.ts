@@ -11,7 +11,7 @@ import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { Vigil } from "./orchestrator.js";
 import type { VigilConfig } from "./config.js";
-import { printSummary, pathOf, exitCode, coverageLine } from "./reporter/index.js";
+import { printSummary, pathOf, exitCode, coverageLine, judgeErrorReason } from "./reporter/index.js";
 
 const program = new Command();
 program.name("vigil").description("Post-deploy sanity checker — deterministic capture, AI judgment.");
@@ -75,7 +75,15 @@ program
       const vigil = await Vigil.create(await loadConfig(), base);
       const p = await vigil.checkPage(target);
       const mark = { fail: "❌", warn: "⚠️", pass: "✅", skipped: "⏭️" }[p.status];
-      process.stdout.write(`\n${mark} ${p.status.toUpperCase()}${p.hardRule ? ` (${p.hardRule})` : ""} ${pathOf(p.url)}\n   ${p.headline}\n`);
+      // p.headline for an unjudged/error page is a label glued onto the
+      // *pre-judge* deterministic headline ("unjudged — judge error: <old
+      // headline>") — it never carries the actual reason the judge call
+      // failed. Without printing judgeError too, a rate limit or provider
+      // outage is indistinguishable from the judge having genuinely looked
+      // and found the page unresolved.
+      const why = judgeErrorReason(p);
+      const reason = why ? `\n   reason: ${why}` : "";
+      process.stdout.write(`\n${mark} ${p.status.toUpperCase()}${p.hardRule ? ` (${p.hardRule})` : ""} ${pathOf(p.url)}\n   ${p.headline}${reason}\n`);
       process.exit(p.status === "fail" ? 1 : 0);
     });
   });

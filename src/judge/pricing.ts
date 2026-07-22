@@ -20,6 +20,12 @@ export const MODEL_PRICES: Record<string, ModelPrice> = {
   "claude-haiku-4-5": { inUsdPerMTok: 1, outUsdPerMTok: 5 },
   "gpt-5-mini": { inUsdPerMTok: 0.25, outUsdPerMTok: 2 },
   "gemini-2.5-flash": { inUsdPerMTok: 0.3, outUsdPerMTok: 2.5 },
+  // Flash-tier estimate carried over from gemini-2.5-flash — no live pricing
+  // page for the "-latest" alias itself, since it always points at whatever
+  // Google's current flash model is. Same staleness risk any dated model id
+  // already carries (a provider can reprice claude-haiku-4-5 too); revisit if
+  // vigil's real per-call cost drifts noticeably from this estimate.
+  "gemini-flash-latest": { inUsdPerMTok: 0.3, outUsdPerMTok: 2.5 },
 };
 
 // Sonnet-tier prices: high enough to upper-bound any model someone would

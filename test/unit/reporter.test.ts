@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { buildSummary, fmtDuration, pathOf, hostOf } from "../../src/reporter/index.js";
+import { buildSummary, fmtDuration, pathOf, hostOf, judgeErrorReason } from "../../src/reporter/index.js";
 import { renderHtml } from "../../src/reporter/html.js";
-import type { RunResult } from "../../src/types.js";
+import type { RunResult, PageResult } from "../../src/types.js";
 
 function result(over: Partial<RunResult> = {}): RunResult {
   return {
@@ -260,6 +260,39 @@ describe("renderHtml", () => {
       })
     );
     expect(html).toContain("never produced a document");
+  });
+});
+
+describe("judgeErrorReason", () => {
+  // This is the single source of truth every caller must use to surface why
+  // a judge call failed (p.headline never carries it — see the comment at
+  // its definition). Both `vigil run`'s summary and `vigil check`'s single-
+  // page output go through this; a caller that reimplements the condition by
+  // hand is exactly how the `check` command silently dropped the reason.
+  const base = (over: Partial<PageResult>): PageResult => ({
+    url: "https://app.example.com/x",
+    source: "sitemap",
+    status: "warn",
+    headline: "unjudged — judge error: clean",
+    decidedBy: "error",
+    retried: false,
+    flaky: false,
+    signals: emptySignals(),
+    timings: { visitMs: 1 },
+    cost: { judgeUsd: 0, flowsUsd: 0 },
+    ...over,
+  });
+
+  it("returns the reason when decidedBy is error and judgeError is set", () => {
+    expect(judgeErrorReason(base({ judgeError: "provider unavailable" }))).toBe("provider unavailable");
+  });
+
+  it("returns undefined when decidedBy is not error, even with judgeError set", () => {
+    expect(judgeErrorReason(base({ decidedBy: "judge", judgeError: "provider unavailable" }))).toBeUndefined();
+  });
+
+  it("returns undefined when judgeError is absent", () => {
+    expect(judgeErrorReason(base({ judgeError: undefined }))).toBeUndefined();
   });
 });
 

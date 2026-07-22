@@ -36,7 +36,16 @@ export interface ResolvedModel {
 // ("tune the default") is then a one-line change, not a search-and-replace.
 export const DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5";
 export const DEFAULT_OPENAI_MODEL = "gpt-5-mini";
-export const DEFAULT_GOOGLE_MODEL = "gemini-2.5-flash";
+// A dated model id ("gemini-2.5-flash") can be retired for new accounts out
+// from under vigil with no warning — confirmed live: a fresh Google AI Studio
+// key got "this model is no longer available to new users" while the model
+// list endpoint still listed it. The "-latest" alias is Google's own answer
+// to exactly this — it always resolves to whatever's current, so vigil's
+// default doesn't go stale as the Gemini lineup moves forward. Has its own
+// price entry in pricing.ts (carried over from gemini-2.5-flash) so the cost
+// reservation stays accurate rather than falling back to the conservative
+// unknown-model estimate.
+export const DEFAULT_GOOGLE_MODEL = "gemini-flash-latest";
 
 /** Resolve the judge model: explicit config wins, then env auto-detection. */
 export async function resolveJudgeModel(explicit?: LanguageModel): Promise<ResolvedModel> {
