@@ -78,7 +78,17 @@ Phase 2 implements the full AI verdict layer behind a single orchestrator seam, 
 
 ### Judge evidence interpretation contract
 
-**Status:** Open research — not scheduled, not a workaround target.
+**Status:** Scoped — ready to implement, not started.
+
+**In plain terms.** Right now the judge looks at all the evidence for a page — the screenshot,
+the render signals, everything — and jumps straight to "pass, warn, or fail." Nothing forces it
+to actually work through what it's looking at first. It's the difference between a doctor
+glancing at an X-ray and saying "looks fine" versus a doctor who has to write down "is there a
+fracture? yes/no. Is alignment normal? yes/no." *before* being allowed to give a diagnosis. The
+second doctor is harder to fool with a rushed glance, because they've been forced to actually
+look at the specific things that matter. This plan adds that forced first step to the judge —
+without giving vigil's code itself any new power to overrule the judge, which stays the judge's
+job alone (see Non-goals below).
 
 **Problem.** The Collector now produces reliable render evidence (validated below by the
 `/careers` improvement). The judge can still misinterpret that evidence. On qplus.tv `/`, the
@@ -134,21 +144,69 @@ that actually reports what's on screen.
   hard-coded policy — architectural drift away from "Collector observes, Judge interprets."
 - Do not modify `verdictPolicy.ts` as a workaround for this specific failure.
 
-**Research directions.**
-- Structured reasoning over render state *before* the verdict — e.g. forcing the model through
-  explicit sub-questions (is a loading indicator visible? did meaningful content render? is the
-  page still loading? what visible evidence supports each answer?) ahead of the final
-  pass/warn/fail, so it can't skip straight to a plausible-sounding verdict without engaging the
-  render fields.
-- Better field semantics in the prompt/digest — explicit documentation of which fields are
-  metadata vs. rendered-content evidence.
-- Whether `SignalsDigest` itself should structurally separate metadata (`title`, `document.status`)
-  from visible-page evidence (`textSample`, `spinnerStuck`, `screenshotLooksBlank`), rather than
-  relying on the prompt alone to make that distinction.
+**The plan, in three parts.**
 
-**Scope note:** treat this as a judge-contract redesign, not a prompt tweak — a fresh branch, not
-folded into collector work, so it stays answerable independently later whether a given behavior
-change came from better evidence (Collector) or better reasoning (Judge).
+1. **A forced render-assessment step, before the verdict.** Add a required object to the judge's
+   output schema (`src/judge/schema.ts`) that the model must fill in *before* `status`:
+   ```ts
+   renderAssessment: {
+     loadingIndicatorVisible: boolean,
+     meaningfulContentRendered: boolean,
+     pageStillLoading: boolean,
+     visualEvidence: string,   // what specifically, in the screenshot or digest, supports the three answers above
+   }
+   ```
+   Field order in a schema-enforced object isn't cosmetic here — the model fills fields in the
+   order the schema defines them, so putting `renderAssessment` ahead of `status` means the
+   verdict is generated *after* the model has already committed, in writing, to specific answers
+   about what it's looking at. That's the whole mechanism: not a smarter model, just one that
+   can't skip the homework.
+
+2. **Field semantics, explicit in the prompt.** `JUDGE_SYSTEM_INSTRUCTION`
+   (`src/judge/prompt.ts`) gets a short, explicit line distinguishing the two kinds of field the
+   digest carries: *metadata* (`render.title`, `document.status` — present on nearly every page,
+   broken or not, and never evidence of successful rendering on their own) versus *render-state
+   evidence* (`render.textSample`, `render.spinnerStuck`, `render.screenshotLooksBlank`, and the
+   screenshot itself — the only things that actually describe what a user would see). This is
+   the direct fix for the exact mistake in the Evidence section above: the model cited `title`'s
+   *presence* as if that were proof of successful rendering.
+
+3. **The render assessment becomes visible evidence, not a hidden scratchpad.** It gets its own
+   block in the HTML report's judge card (`src/reporter/html.ts`), next to the existing reasons
+   list. This does two things: it gives a human reading the report a second, independent way to
+   catch a bad verdict (if the assessment says "still loading: true" next to a `pass`, that's
+   immediately visible and suspicious to a reader, without vigil's code needing to police it),
+   and it makes the judge's real behavior across many runs observable over time — is the
+   assessment step actually engaging with the evidence, or is the model filling it in as
+   rubber-stamp boilerplate that agrees with whatever `status` it was already going to pick?
+   That question can only be answered by looking at real output, not decided in advance.
+
+**Explicitly not part of this plan** (restating and sharpening the Non-goals above): vigil's code
+never reads `renderAssessment` and cross-checks it against `status` to override, downgrade, or
+flag anything automatically. Doing that would just be the contradiction guard again, wearing a
+different field name — the exact architectural drift this issue was opened to avoid. The
+assessment step is a prompting technique aimed at the model's own reasoning, not a new input to
+vigil's deterministic policy layer. `verdictPolicy.ts` does not change as part of this work.
+
+**Acceptance criterion.** Replay the exact qplus.tv `/` case from the Evidence section above —
+same digest fragment, same screenshot — through the redesigned prompt/schema, using the same
+model tier that got it wrong the first time (a free-tier model, not Gemini, which already
+happened to reason through this correctly on the current prompt — see the note below). Success
+means the new prompt prevents that specific model from repeating that specific mistake. This is a
+concrete, reproducible bar — not "seems better" — and it should run through the existing mock-model
+integration test harness (`test/integration/judge.test.ts`) before any real-model validation.
+
+**One important caveat already known going in:** when this issue was first found, it was on a
+free-tier open-source model. A later real-site validation run using Gemini reasoned through the
+*same* evidence *correctly*, on the *unmodified* current prompt, with no changes. That doesn't
+make this plan unnecessary — a judge that only reasons well on strong models isn't a judge vigil
+can promise cost-conscious users will work reliably on a cheap default — but it does mean the
+acceptance test above must specifically target a weaker model, since Gemini passing again would
+prove nothing new.
+
+**Scope note:** a fresh branch, not folded into collector work, so history stays answerable later
+on whether a given behavior change came from better evidence (Collector) or better reasoning
+(Judge).
 
 ## What success looks like (12 months out)
 
