@@ -4,7 +4,15 @@ import type { JudgeVerdict } from "../../src/types.js";
 
 const reason = { kind: "network" as const, summary: "Payment API returned 500", evidence: "POST /api/payment -> 500" };
 
+const cleanAssessment = {
+  loadingIndicatorVisible: false,
+  meaningfulContentRendered: true,
+  pageStillLoading: false,
+  visualEvidence: "page rendered, evidence is a network-layer failure not a render-state one",
+};
+
 const verdict = (status: JudgeVerdict["status"], confidence: number, reasons = [reason]): JudgeVerdict => ({
+  renderAssessment: cleanAssessment,
   status,
   confidence,
   reasons,

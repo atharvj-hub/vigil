@@ -142,7 +142,26 @@ export interface JudgeReason {
   evidence: string; // cites a concrete signal / visible element
 }
 
+/**
+ * Forced first step, before the model is allowed to produce a verdict
+ * (documentation/10-roadmap.md "Judge evidence interpretation contract").
+ * Schema field order matters here: this is generated before `status`, so the
+ * model has already committed to specific answers about what it's looking at
+ * before it commits to pass/warn/fail. vigil's own code never reads this to
+ * override or cross-check the verdict — that would be the contradiction
+ * guard again under a different name. It exists purely so a human reading
+ * the report has a second, independent way to catch a bad verdict, and so
+ * the judge's real behavior is observable over many runs.
+ */
+export interface RenderAssessment {
+  loadingIndicatorVisible: boolean;
+  meaningfulContentRendered: boolean;
+  pageStillLoading: boolean;
+  visualEvidence: string; // what specifically, in the screenshot or digest, supports the three answers above
+}
+
 export interface JudgeVerdict {
+  renderAssessment: RenderAssessment;
   status: "pass" | "warn" | "fail";
   confidence: number; // 0–1
   reasons: JudgeReason[];

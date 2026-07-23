@@ -205,7 +205,30 @@ function judgeCard(j: JudgeVerdict | undefined): string {
       <span>Confidence ${j.confidence.toFixed(2)}</span>
       <div class="meter-bar"><div class="meter-fill" style="width:${pct}%;background:${barColor}"></div></div>
     </div>
+    ${renderAssessmentBlock(j.renderAssessment)}
     ${reasonsList}
+  </div>`;
+}
+
+// Doc 10 "Judge evidence interpretation contract": the model's own forced
+// pre-verdict checklist, surfaced as its own block so a human can cross-check
+// it against the verdict above by eye. Purely presentational — nothing here
+// feeds back into status/headline; vigil's code never reads this to override
+// anything (that would be the contradiction guard again under a new name).
+function renderAssessmentBlock(ra: JudgeVerdict["renderAssessment"] | undefined): string {
+  if (!ra) return ""; // absent only for verdicts predating this field (old report.json replays)
+  const row = (label: string, value: boolean, concerning: boolean) =>
+    `<li><span class="ra-label">${esc(label)}</span> <span class="ra-value ${
+      value === concerning ? "ra-flag" : ""
+    }">${value ? "yes" : "no"}</span></li>`;
+  return `<div class="ra-block">
+    <h5>Render assessment</h5>
+    <ul class="ra-list">
+      ${row("Loading indicator visible", ra.loadingIndicatorVisible, true)}
+      ${row("Meaningful content rendered", ra.meaningfulContentRendered, false)}
+      ${row("Page still loading", ra.pageStillLoading, true)}
+    </ul>
+    <p class="ra-evidence">${esc(ra.visualEvidence)}</p>
   </div>`;
 }
 
@@ -371,6 +394,14 @@ figcaption{color:var(--muted);font-size:.75rem;margin-top:.25rem}
 .judge-reasons{margin:.25rem 0;padding-left:1.1rem;list-style:none}
 .judge-reasons li{margin-bottom:.4rem;font-size:.85rem}
 .evi-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.8rem;color:var(--muted);margin-top:.15rem}
+.ra-block{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:.5rem .7rem;margin-bottom:.6rem}
+.ra-block h5{margin:0 0 .35rem;font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+.ra-list{margin:0;padding:0;list-style:none}
+.ra-list li{display:flex;justify-content:space-between;gap:.5rem;font-size:.82rem;padding:.1rem 0}
+.ra-label{color:var(--muted)}
+.ra-value{font-weight:700}
+.ra-value.ra-flag{color:var(--red)}
+.ra-evidence{margin:.4rem 0 0;font-size:.8rem;color:var(--muted);font-style:italic}
 footer{padding:1.5rem 2rem;color:var(--muted);font-size:.8rem}
 .filters{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.75rem}
 .f-btn{font:inherit;font-size:.78rem;color:var(--fg);background:var(--card);border:1px solid var(--line);

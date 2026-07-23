@@ -80,6 +80,12 @@ describe("buildSummary", () => {
           headline: "error toast visible",
           decidedBy: "judge",
           judge: {
+            renderAssessment: {
+              loadingIndicatorVisible: false,
+              meaningfulContentRendered: true,
+              pageStillLoading: false,
+              visualEvidence: "checkout form rendered; a red error toast overlays it",
+            },
             status: "fail",
             confidence: 0.97,
             reasons: [{ kind: "visual", summary: "error toast visible", evidence: "toast banner" }],
@@ -137,6 +143,12 @@ describe("renderHtml", () => {
           headline: "error toast visible",
           decidedBy: "judge",
           judge: {
+            renderAssessment: {
+              loadingIndicatorVisible: false,
+              meaningfulContentRendered: true,
+              pageStillLoading: false,
+              visualEvidence: "checkout form rendered; a red error toast overlays it",
+            },
             status: "fail",
             confidence: 0.97,
             reasons: [{ kind: "visual", summary: "error toast visible", evidence: "toast banner visible" }],
@@ -187,6 +199,103 @@ describe("renderHtml", () => {
     expect(html).toContain("toast banner visible");
     expect(html).toContain("Unjudged — model budget exhausted");
     expect(html).toContain("Unjudged — judge error: provider unavailable");
+  });
+
+  it("renders the render-assessment checklist inside the judge card, flagging concerning answers", async () => {
+    const r = result({
+      pages: [
+        {
+          url: "https://app.example.com/stuck",
+          source: "sitemap",
+          status: "fail",
+          headline: "judge: stuck on a loading spinner",
+          decidedBy: "judge",
+          judge: {
+            renderAssessment: {
+              loadingIndicatorVisible: true,
+              meaningfulContentRendered: false,
+              pageStillLoading: true,
+              visualEvidence: "black screen, one spinner mid-animation, textSample is a placeholder string",
+            },
+            status: "fail",
+            confidence: 0.95,
+            reasons: [{ kind: "visual", summary: "stuck on a loading spinner", evidence: "black screen with spinner" }],
+          },
+          retried: false,
+          flaky: false,
+          signals: emptySignals(),
+          timings: { visitMs: 1, judgeMs: 100 },
+          cost: { judgeUsd: 0.004, flowsUsd: 0 },
+        },
+      ],
+    });
+
+    const html = await renderHtml(r);
+    expect(html).toContain("Render assessment");
+    expect(html).toContain("black screen, one spinner mid-animation");
+    // All three checklist answers are concerning here (spinner visible, no
+    // content rendered, still loading), so all three must render with the
+    // visual flag class — this is what makes a bad verdict catchable by eye
+    // without vigil's code interfering with the verdict itself.
+    const flagCount = (html.match(/ra-value ra-flag/g) ?? []).length;
+    expect(flagCount).toBe(3);
+  });
+
+  it("flags nothing when the render assessment is entirely healthy", async () => {
+    const r = result({
+      pages: [
+        {
+          url: "https://app.example.com/faq",
+          source: "sitemap",
+          status: "pass",
+          headline: "clean",
+          decidedBy: "judge",
+          judge: {
+            renderAssessment: {
+              loadingIndicatorVisible: false,
+              meaningfulContentRendered: true,
+              pageStillLoading: false,
+              visualEvidence: "FAQ content fully rendered, no spinners",
+            },
+            status: "pass",
+            confidence: 1,
+            reasons: [],
+          },
+          retried: false,
+          flaky: false,
+          signals: emptySignals(),
+          timings: { visitMs: 1, judgeMs: 100 },
+          cost: { judgeUsd: 0.004, flowsUsd: 0 },
+        },
+      ],
+    });
+    const html = await renderHtml(r);
+    // Every page — pass included — is its own expandable row carrying the
+    // judge card (only the screenshot is pass-gated), so this asserts
+    // directly on the flag count with no status-dependent caveat.
+    expect((html.match(/ra-value ra-flag/g) ?? []).length).toBe(0);
+  });
+
+  it("omits the render-assessment block gracefully when absent (old report replays)", async () => {
+    const r = result({
+      pages: [
+        {
+          url: "https://app.example.com/checkout",
+          source: "sitemap",
+          status: "fail",
+          headline: "POST /api/payment → 500",
+          decidedBy: "hard-rule",
+          hardRule: "H2",
+          retried: true,
+          flaky: false,
+          signals: emptySignals(),
+          timings: { visitMs: 1 },
+          cost: { judgeUsd: 0, flowsUsd: 0 },
+        },
+      ],
+    });
+    const html = await renderHtml(r);
+    expect(html).not.toContain("Render assessment");
   });
 
   it("renders a status filter with per-status counts, and tags every row/detail so it can filter", async () => {

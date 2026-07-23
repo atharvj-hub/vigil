@@ -22,6 +22,24 @@ describe("judge prompt", () => {
     }
   });
 
+  // doc 10 "Judge evidence interpretation contract" — the fix for the exact
+  // recorded mistake (citing render.title's presence as proof of successful
+  // rendering) is this instruction distinguishing metadata from render-state
+  // evidence, plus telling the model to fill the checklist before deciding.
+  it("distinguishes metadata fields from render-state evidence, and orders the checklist before the verdict (drift guard)", () => {
+    const lower = JUDGE_SYSTEM_INSTRUCTION.toLowerCase();
+    for (const essential of [
+      "metadata",
+      "render-state evidence",
+      "render.title",
+      "render.textsample",
+      "renderassessment",
+      "before producing a verdict",
+    ]) {
+      expect(lower).toContain(essential.toLowerCase());
+    }
+  });
+
   it("builds the fixed instructions + one multimodal user message, screenshot first", () => {
     const { instructions, messages } = buildJudgePrompt(evidence);
     expect(instructions).toBe(JUDGE_SYSTEM_INSTRUCTION);

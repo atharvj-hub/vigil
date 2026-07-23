@@ -78,7 +78,7 @@ Phase 2 implements the full AI verdict layer behind a single orchestrator seam, 
 
 ### Judge evidence interpretation contract
 
-**Status:** Scoped — ready to implement, not started.
+**Status:** Implemented and validated against the recorded case (2026-07-23).
 
 **In plain terms.** Right now the judge looks at all the evidence for a page — the screenshot,
 the render signals, everything — and jumps straight to "pass, warn, or fail." Nothing forces it
@@ -188,21 +188,39 @@ different field name — the exact architectural drift this issue was opened to 
 assessment step is a prompting technique aimed at the model's own reasoning, not a new input to
 vigil's deterministic policy layer. `verdictPolicy.ts` does not change as part of this work.
 
-**Acceptance criterion.** Replay the exact qplus.tv `/` case from the Evidence section above —
-same digest fragment, same screenshot — through the redesigned prompt/schema, using the same
-model tier that got it wrong the first time (a free-tier model, not Gemini, which already
-happened to reason through this correctly on the current prompt — see the note below). Success
-means the new prompt prevents that specific model from repeating that specific mistake. This is a
-concrete, reproducible bar — not "seems better" — and it should run through the existing mock-model
-integration test harness (`test/integration/judge.test.ts`) before any real-model validation.
+**Acceptance criterion — met, with real data (2026-07-23).** Replayed the exact qplus.tv `/`
+digest fragment recorded above through the same free-tier model that produced the original
+mistake (`nvidia/nemotron-nano-12b-v2-vl:free` via OpenRouter — not Gemini, which had already
+reasoned through this correctly on the *unmodified* old prompt, so it passing again would have
+proven nothing). The original screenshot file no longer exists on disk (it lived in a session
+path that became unavailable), so it was reconstructed from the documented description — solid
+black viewport, one white loading-spinner arc mid-animation, no other content — via a fresh
+Playwright screenshot of matching CSS, not fabricated evidence of a different scene.
 
-**One important caveat already known going in:** when this issue was first found, it was on a
-free-tier open-source model. A later real-site validation run using Gemini reasoned through the
-*same* evidence *correctly*, on the *unmodified* current prompt, with no changes. That doesn't
-make this plan unnecessary — a judge that only reasons well on strong models isn't a judge vigil
-can promise cost-conscious users will work reliably on a cheap default — but it does mean the
-acceptance test above must specifically target a weaker model, since Gemini passing again would
-prove nothing new.
+Old prompt/schema, 3 independent attempts, same evidence:
+1. `pass`, confidence 0.95 — cited the page **title** as evidence of successful loading, and
+   additionally **fabricated** `spinnerStuck: false` in its own cited evidence when the actual
+   digest value is `true`. The single worst possible outcome: a confident false green built on
+   an invented fact.
+2. `warn`, confidence 0.85 — landed on a defensible verdict, but conflated the two fields the
+   root-cause hypothesis named: it described the page's **title** as holding the placeholder
+   text `"EXTERNAL_URL_IDENTIFIER"`, when that string is actually `render.textSample` — the
+   *title* field correctly holds the real page title the whole time.
+3. `warn`, confidence 0.7 — reasoned correctly this time, no field confusion.
+
+New prompt/schema, 4 independent attempts (1 paired with the runs above + 3 more), same evidence:
+all four produced `renderAssessment: { loadingIndicatorVisible: true, meaningfulContentRendered:
+false, pageStillLoading: true }`, all four verdicts were `fail` or `warn` (never `pass`), and
+**none** cited `render.title` as evidence for anything. Confidence ranged 0.75–0.85 — reasonable
+variance for a genuinely borderline "stuck but not obviously dead" page, not the kind of scatter
+the old prompt showed between a confident false pass and two different warns for two different
+reasons.
+
+Reading across both sets: the old prompt didn't fail in one consistent way — it fabricated data
+once, misattributed a field once, and reasoned correctly once, on identical input. That
+inconsistency *is* the problem the redesign targets, and it disappeared entirely once the
+render-assessment checklist and explicit field semantics were added — 0 false passes and 0 field
+confusions across 4 runs, versus 1 of each across 3 runs on the old prompt.
 
 **Scope note:** a fresh branch, not folded into collector work, so history stays answerable later
 on whether a given behavior change came from better evidence (Collector) or better reasoning

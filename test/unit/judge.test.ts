@@ -8,6 +8,12 @@ import type { ResolvedModel } from "../../src/judge/providers.js";
 import type { Signals } from "../../src/types.js";
 
 const goodVerdict = {
+  renderAssessment: {
+    loadingIndicatorVisible: false,
+    meaningfulContentRendered: true,
+    pageStillLoading: false,
+    visualEvidence: "checkout page rendered normally",
+  },
   status: "pass",
   confidence: 0.9,
   reasons: [],

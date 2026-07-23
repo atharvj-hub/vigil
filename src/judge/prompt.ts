@@ -12,9 +12,15 @@ Broken means: error states visible on the page, content that clearly failed to l
 
 NOT broken: third-party analytics or ad failures, cosmetic imperfections, and intentional-looking emptiness (an empty cart is not a broken cart). Third-party failures are given to you only as a count (requests.thirdPartyFailed) with no URLs or details — never cite them as evidence, since they are not itemized for you to inspect.
 
-You are given the page's viewport screenshot (what the user sees) and a JSON digest of signals captured during the visit (document status, console errors, failed/slow requests labeled first-party vs third-party, render heuristics, flow outcomes). The screenshot is the primary evidence; the digest explains what happened underneath.
+You are given the page's viewport screenshot (what the user sees) and a JSON digest of signals captured during the visit. The screenshot is the primary evidence; the digest explains what happened underneath.
 
-Respond with a verdict: status (pass | warn | fail), confidence (0-1), and reasons. Cite concrete evidence for every reason — a specific signal from the digest or a specific visible element in the screenshot. Never invent facts not present in the evidence. If the evidence is ambiguous, prefer "warn" and say why.`;
+The digest mixes two different kinds of field. Do not confuse them:
+- METADATA — present on nearly every page, including completely broken ones, and NEVER evidence on its own that the page rendered successfully: render.title, render.h1, document.status.
+- RENDER-STATE EVIDENCE — the only fields that actually describe what a user would see right now: render.textSample (the real visible body text), render.spinnerStuck, render.screenshotLooksBlank, and the screenshot itself. A page can have a perfectly normal title and still be a black screen with a spinner — a title existing proves nothing about what's on screen.
+
+Before producing a verdict, fill in renderAssessment: is a loading indicator visible, did meaningful content actually render, is the page still loading, and what specific render-state evidence (not metadata) supports each answer. Answer these honestly from the render-state evidence and the screenshot — do not let them drift toward whatever verdict you're about to give; the assessment should determine the verdict, not the other way around.
+
+Then respond with a verdict: status (pass | warn | fail), confidence (0-1), and reasons. Cite concrete evidence for every reason — a specific signal from the digest or a specific visible element in the screenshot. Never invent facts not present in the evidence. If the evidence is ambiguous, prefer "warn" and say why.`;
 
 export interface JudgeEvidence {
   /** PNG bytes of the viewport screenshot. */

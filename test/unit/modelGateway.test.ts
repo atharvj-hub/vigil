@@ -9,7 +9,15 @@ const MODEL_ID = "claude-haiku-4-5";
 const IN_TOK = 2000;
 const OUT_TOK = 100;
 
+const cleanAssessment = {
+  loadingIndicatorVisible: false,
+  meaningfulContentRendered: true,
+  pageStillLoading: false,
+  visualEvidence: "page rendered, error toast overlays otherwise-normal content",
+};
+
 const goodVerdict = {
+  renderAssessment: cleanAssessment,
   status: "fail",
   confidence: 0.95,
   reasons: [{ kind: "network", summary: "Payment API returned 500", evidence: "POST /api/payment/intent -> 500" }],
@@ -79,7 +87,7 @@ describe("callJudgeModel", () => {
   });
 
   it("throws MalformedVerdictError when the verdict is non-pass with zero reasons, carrying billed cost", async () => {
-    const malformed = { status: "fail", confidence: 0.9, reasons: [] };
+    const malformed = { renderAssessment: cleanAssessment, status: "fail", confidence: 0.9, reasons: [] };
     const model = new MockLanguageModelV3({ modelId: MODEL_ID, doGenerate: generateResult(malformed) });
     const err = await callJudgeModel(prompt, resolved(model), { backoffMs: 0 }).catch((e) => e);
     expect(err).toBeInstanceOf(MalformedVerdictError);
@@ -88,7 +96,7 @@ describe("callJudgeModel", () => {
   });
 
   it("throws MalformedVerdictError on schema-invalid output (confidence out of range)", async () => {
-    const invalid = { status: "pass", confidence: 2.3, reasons: [] };
+    const invalid = { renderAssessment: cleanAssessment, status: "pass", confidence: 2.3, reasons: [] };
     const model = new MockLanguageModelV3({ modelId: MODEL_ID, doGenerate: generateResult(invalid) });
     const err = await callJudgeModel(prompt, resolved(model), { backoffMs: 0 }).catch((e) => e);
     expect(err).toBeInstanceOf(MalformedVerdictError);
@@ -102,7 +110,9 @@ describe("callJudgeModel", () => {
       modelId: MODEL_ID,
       doGenerate: async () => {
         calls++;
-        return generateResult(calls === 1 ? { status: "warn", confidence: 0.5, reasons: [] } : goodVerdict);
+        return generateResult(
+          calls === 1 ? { renderAssessment: cleanAssessment, status: "warn", confidence: 0.5, reasons: [] } : goodVerdict
+        );
       },
     });
     const result = await callJudgeModel(prompt, resolved(model), { backoffMs: 0 });

@@ -11,7 +11,24 @@ export const JudgeReasonSchema = z.object({
   evidence: z.string().min(1),
 });
 
+// Forced first step, before the model may produce a verdict (doc 10 "Judge
+// evidence interpretation contract"). Declared BEFORE `status` in the object
+// below deliberately — structured-output generation fills fields in
+// declaration order, so the model has to commit to specific answers about
+// what it's looking at before it commits to pass/warn/fail. This is the
+// entire mechanism: no new model capability, just no way to skip the
+// question. vigil's code never reads this to override the verdict (doc 10
+// non-goals) — it exists for the model's own reasoning and for a human
+// reading the report to cross-check by eye.
+export const RenderAssessmentSchema = z.object({
+  loadingIndicatorVisible: z.boolean(),
+  meaningfulContentRendered: z.boolean(),
+  pageStillLoading: z.boolean(),
+  visualEvidence: z.string().min(1),
+});
+
 export const JudgeVerdictSchema = z.object({
+  renderAssessment: RenderAssessmentSchema,
   status: z.enum(["pass", "warn", "fail"]),
   confidence: z.number().min(0).max(1),
   reasons: z.array(JudgeReasonSchema),

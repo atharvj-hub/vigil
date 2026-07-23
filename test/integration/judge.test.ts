@@ -67,8 +67,26 @@ function mockJudge(decide: (path: string, call: number) => JudgeVerdictShape | E
   });
 }
 
-const pass = (confidence = 0.95): JudgeVerdictShape => ({ status: "pass", confidence, reasons: [] });
+const cleanAssessment = {
+  loadingIndicatorVisible: false,
+  meaningfulContentRendered: true,
+  pageStillLoading: false,
+  visualEvidence: "page rendered its normal content, no spinner",
+};
+
+const pass = (confidence = 0.95): JudgeVerdictShape => ({
+  renderAssessment: cleanAssessment,
+  status: "pass",
+  confidence,
+  reasons: [],
+});
 const fail = (confidence: number): JudgeVerdictShape => ({
+  renderAssessment: {
+    loadingIndicatorVisible: false,
+    meaningfulContentRendered: false,
+    pageStillLoading: false,
+    visualEvidence: "the widget's mount point is empty",
+  },
   status: "fail",
   confidence,
   reasons: [{ kind: "visual", summary: "widget failed to render", evidence: "empty region where the widget mounts" }],
