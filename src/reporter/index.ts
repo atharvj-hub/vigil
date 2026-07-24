@@ -100,6 +100,7 @@ export function coverageLine(cov: RunResult["coverage"]): string {
   if (cov.duplicatesDropped) dropped.push(`${cov.duplicatesDropped} duplicate`);
   if (cov.samplingDropped) dropped.push(`${cov.samplingDropped} sampled out of parametric families`);
   if (cov.capDropped) dropped.push(`${cov.capDropped} cut by maxPages`);
+  if (cov.crossOriginDropped) dropped.push(`${cov.crossOriginDropped} cross-origin (different host)`);
   if (dropped.length) parts.push(`dropped: ${dropped.join(", ")}`);
   return parts.join(" · ");
 }

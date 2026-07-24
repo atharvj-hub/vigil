@@ -106,10 +106,14 @@ export function assemblePageSet(
 
   // ── Sources 2-4: normalize + same-origin + glob filter; config wins ties. ──
   const discoveredPages: DiscoveredPage[] = [];
+  let crossOriginDropped = 0;
   const pushDiscovered = (raw: string, source: "crawl" | "sitemap" | "api") => {
     const url = normalizeUrl(raw, origin);
     if (!url) return;
-    if (!isSameOrigin(url, origin, discovery.allowSubdomains)) return;
+    if (!isSameOrigin(url, origin, discovery.allowSubdomains)) {
+      crossOriginDropped++;
+      return;
+    }
     if (!passesGlobs(pathOf(url), discovery.include, discovery.exclude)) return;
     if (configSet.has(url)) return;
     discoveredPages.push({ url, source });
@@ -144,6 +148,7 @@ export function assemblePageSet(
     duplicatesDropped,
     samplingDropped,
     capDropped,
+    crossOriginDropped,
   };
 
   return {

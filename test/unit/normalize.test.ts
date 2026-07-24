@@ -37,6 +37,13 @@ describe("isSameOrigin", () => {
   it("allows subdomains when opted in", () => {
     expect(isSameOrigin("https://sub.a.com/x", origin, true)).toBe(true);
   });
+  it("treats apex and www as the same site regardless of direction, even without allowSubdomains", () => {
+    expect(isSameOrigin("https://www.a.com/x", origin, false)).toBe(true);
+    expect(isSameOrigin("https://a.com/x", "https://www.a.com", false)).toBe(true);
+  });
+  it("still rejects other subdomains when apex/www matching doesn't apply", () => {
+    expect(isSameOrigin("https://blog.a.com/x", origin, false)).toBe(false);
+  });
 });
 
 describe("globToRegExp / passesGlobs", () => {

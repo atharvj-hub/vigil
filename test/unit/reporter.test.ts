@@ -27,6 +27,7 @@ function result(over: Partial<RunResult> = {}): RunResult {
       duplicatesDropped: 0,
       samplingDropped: 0,
       capDropped: 0,
+      crossOriginDropped: 0,
     },
     artifactsDir: "vigil-report/2026-07-09T06-00-00_abcd",
     ...over,

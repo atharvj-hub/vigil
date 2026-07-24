@@ -34,6 +34,7 @@ export interface DiscoveryCoverage {
   duplicatesDropped: number; // same URL from >1 source, or repeated
   samplingDropped: number; // parametric families collapsed to samples
   capDropped: number; // dropped by maxPages after everything else
+  crossOriginDropped: number; // same-origin check rejected it (e.g. apex vs www, subdomain)
 }
 
 export interface PageSet {

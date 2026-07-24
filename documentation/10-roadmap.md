@@ -49,6 +49,7 @@ Phase 2 implements the full AI verdict layer behind a single orchestrator seam, 
 | **Model cost/latency surprises** | per-run model spend is new to CI | Hard `maxModelCostUsd`; cheap-model default; costs printed on every run; hard rules keep working when budget exhausts (`unjudged`, yellow) |
 | **Provider drift / lock-in** | any single-vendor coupling contradicts the agnostic promise | All model access through the AI SDK `LanguageModel` seam; Stagehand is itself model-agnostic; judge prompt uses no provider-specific features beyond structured output |
 | **Discovery misses pages** | outside-in can't see unlinked, unlisted routes | Three merged sources + per-page source in the report (coverage is inspectable) + one-line `routes` fix; explicitly documented limitation (doc 03) |
+| **Headless capture gets bot-blocked** | some sites serve blank/degraded content to headless Chromium specifically | Not yet mitigated — see "Headless capture blocked by anti-bot protection" below; currently a real false-positive source |
 | **Stagehand API churn** | it's a fast-moving young project | vigil touches it only inside FlowRunner/agent-login (~2 files); Midscene identified as drop-in-class alternative (doc 09) |
 | **Auth complexity (SSO/MFA)** | blocks the "everything behind login" majority | storageState reuse + scripted login cover most; test-account pattern documented; TOTP as fast-follow |
 
@@ -75,6 +76,102 @@ Phase 2 implements the full AI verdict layer behind a single orchestrator seam, 
    verdicts on a live SPA. What remains is the non-empty single-late-change case.
 
 ## Open research issues
+
+### Cross-origin discovery gap (apex vs www)
+
+**Status:** Implemented and validated against a live site (2026-07-24).
+
+**In plain terms.** Imagine you ask an inspector to check every room in a building, but you give
+them the address "123 Main St" while the building's real front door is at "123 Main St, Suite
+W" — a different-looking address that redirects to the same place. The inspector stands at your
+address, notices the door says "go next door instead," and stops right there. They don't inspect
+any of the rooms, because as far as their rulebook is concerned, "next door" is a different
+building entirely — even though everyone else can see it's obviously the same one. That's what
+was happening: vigil was told to check `qplus.tv`, the site redirects everyone to `www.qplus.tv`
+(completely normal, most sites do this), and vigil's origin check treated those as two unrelated
+sites — so it silently threw away every page it found there.
+
+**Problem.** `qplus.tv` returns an HTTP 302 redirect to `www.qplus.tv`, and the site's sitemap
+declares all 14 of its URLs on the `www.` host. vigil's same-origin filter
+(`isSameOrigin` in `src/discovery/normalize.ts`) compared hostnames for exact equality unless
+`allowSubdomains` was explicitly turned on (it defaults to off) — and even then, `allowSubdomains`
+only accepted `www.qplus.tv` as a subdomain of `qplus.tv`, never the reverse, so it was fragile to
+which direction the redirect happened to run. The practical result: a `vigil run --url
+https://qplus.tv` discovered and tested exactly **1 page** — the target itself — while 13 real,
+sitemap-declared pages were silently dropped before ever reaching the report. Worse, none of the
+discovery-coverage counters (`duplicatesDropped`, `samplingDropped`, `capDropped`) incremented for
+this, so the report showed "sitemap: 14 declared" sitting right next to "1 page tested" with
+nothing explaining the gap.
+
+**The fix, in two parts.**
+1. **`isSameOrigin` now treats a bare domain and its `www.` prefix as the same site**,
+   regardless of which one is the "origin" and which is the "candidate" — this is the one
+   `www`-shaped exception carved out of an otherwise strict same-origin check; unrelated
+   subdomains (`blog.example.com`, `api.example.com`) are still excluded unless
+   `allowSubdomains` is turned on.
+2. **A new `crossOriginDropped` counter** on `DiscoveryCoverage` (`src/types.ts`), incremented
+   every time a discovered URL is rejected for being off-origin, and surfaced in both the CLI and
+   HTML report's coverage line (`src/reporter/index.ts`). Previously this rejection was
+   completely silent — now "14 declared, X kept, Y dropped as cross-origin" is visible without
+   reading source code.
+
+**Acceptance criterion — met, live (2026-07-24).** Re-ran `vigil discover --url https://qplus.tv`
+before and after:
+- Before: `Discovered 1 page(s)` — only the config target.
+- After: `Discovered 17 page(s)` — all 14 sitemap URLs, plus additional crawl-found pages, with
+  zero cross-origin drops. `npx vitest run` (179 tests) and `tsc --noEmit` both clean.
+
+**Scope note:** this is a discovery-stage fix only — it changes *what pages vigil looks at*, not
+how it judges what it sees. See the next entry for what a full run against the newly-visible 16
+extra pages surfaced.
+
+### Headless capture blocked by anti-bot protection (new, open)
+
+**Status:** Open — discovered while validating the fix above; not yet mitigated.
+
+**In plain terms.** Once vigil could actually see all 17 of qplus.tv's real pages, it ran a full
+check and reported 2 pages as completely broken — solid black screen, nothing rendered. That
+sounded like a real bug, so before trusting it, the natural next step was: open those same two
+pages in an ordinary browser and just look. Both loaded perfectly — full page of content, nothing
+wrong. So the page isn't broken. Something about the way vigil *looks* at the page is broken.
+The evidence points at one specific culprit: vigil's automated browser (Playwright's default
+headless Chromium, launched with no special disguise) is apparently being recognized as a bot by
+qplus.tv and served a blank page on purpose — a common anti-scraping defense — while a normal
+browser with a normal fingerprint sees the real site.
+
+**Evidence (captured 2026-07-24, live run + manual verification):**
+- `vigil run --url https://qplus.tv` flagged `/` and
+  `/detail/tournament/harvey-norman-u19s` as hard failures (`H4`, "0 chars of visible text, no
+  visual content"), each with a genuinely solid-black captured screenshot
+  (`vigil-report/2026-07-24T06-24-46_2411/pages/index.png`).
+- Manually loading both exact URLs in a real browser session immediately after: both rendered
+  full page content — the qplus.tv homepage with live match cards, and the Harvey Norman U19s
+  tournament page with fixtures and a grand-final replay link. Neither page was broken for a real
+  visitor.
+- vigil's capture context (`src/collector.ts`, `browser.newContext(...)`) sets no custom user
+  agent, no stealth/anti-detection measures, and runs plain default headless Chromium — the
+  single most commonly fingerprinted automation signature.
+- 6 of the 17 pages in the same run needed a retry to pass ("flaky"), consistent with
+  intermittent bot-detection rather than a consistently broken page.
+
+**Root cause hypothesis:** qplus.tv (or infrastructure in front of it) fingerprints headless
+Chromium and serves a blank/degraded response, rather than the page itself being unreliable.
+Not yet proven with a packet-level trace — the manual-browser vs. headless-capture contrast is
+strong circumstantial evidence, not a captured bot-check response.
+
+**Why this matters:** every hard-fail vigil reports needs to be trustworthy, or the tool trains
+its users to ignore it. Right now, on at least this one real site, vigil's own capture method is
+capable of manufacturing a false "completely broken" verdict that has nothing to do with the
+site's actual health. This is a capture-stage problem — separate from both the discovery fix
+above and the judge redesign — and it sits upstream of everything else: no amount of better
+judgment or better discovery fixes a screenshot that was never real to begin with.
+
+**Not yet decided (needs investigation before picking a fix):** whether to set a realistic user
+agent / disable common headless tells, whether to detect a suspiciously blank capture and retry
+with a different fingerprint before hard-failing, or whether this is simply out of scope and
+sites doing this should be documented as a known vigil limitation. Deliberately left open rather
+than guessed at — this needs its own scoped investigation the way the judge redesign got one,
+not a quick patch.
 
 ### Judge evidence interpretation contract
 

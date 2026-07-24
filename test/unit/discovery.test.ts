@@ -28,10 +28,17 @@ describe("assemblePageSet — merging the three sources", () => {
     expect(set.pages.map((p) => p.url)).not.toContain("https://a.com/admin/users");
   });
 
-  it("drops off-origin URLs", () => {
+  it("drops off-origin URLs and counts them so the gap is visible", () => {
     const set = assemblePageSet(cfg(), ["https://evil.com/x"], ["https://a.com/ok"]);
     expect(set.pages.map((p) => p.url)).toEqual(expect.arrayContaining(["https://a.com/ok"]));
     expect(set.pages.map((p) => p.url)).not.toContain("https://evil.com/x");
+    expect(set.coverage.crossOriginDropped).toBe(1);
+  });
+
+  it("does not drop www vs apex as cross-origin (the qplus.tv case)", () => {
+    const set = assemblePageSet(cfg(), [], ["https://www.a.com/pricing"]);
+    expect(set.pages.map((p) => p.url)).toContain("https://www.a.com/pricing");
+    expect(set.coverage.crossOriginDropped).toBe(0);
   });
 
   it("collapses a parametric family from the sitemap", () => {

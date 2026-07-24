@@ -114,6 +114,7 @@ export class Vigil {
         duplicatesDropped: 0,
         samplingDropped: 0,
         capDropped: 0,
+        crossOriginDropped: 0,
       },
     };
 

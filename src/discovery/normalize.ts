@@ -35,7 +35,12 @@ export function normalizeUrl(raw: string, base?: string): string | null {
   return u.toString();
 }
 
-/** Same-origin test. Subdomains excluded unless allowSubdomains. */
+/** Strip a leading "www." — apex and www are the same site in every practical sense. */
+function stripWww(hostname: string): string {
+  return hostname.startsWith("www.") ? hostname.slice(4) : hostname;
+}
+
+/** Same-origin test. www/apex are always treated as one site; other subdomains excluded unless allowSubdomains. */
 export function isSameOrigin(candidate: string, origin: string, allowSubdomains: boolean): boolean {
   let c: URL, o: URL;
   try {
@@ -44,13 +49,12 @@ export function isSameOrigin(candidate: string, origin: string, allowSubdomains:
   } catch {
     return false;
   }
-  if (c.protocol !== o.protocol) {
-    // allow http origin to match https target host? No — keep strict on protocol.
-  }
+  const cHost = stripWww(c.hostname);
+  const oHost = stripWww(o.hostname);
   if (allowSubdomains) {
-    return c.hostname === o.hostname || c.hostname.endsWith("." + o.hostname);
+    return cHost === oHost || c.hostname.endsWith("." + o.hostname) || o.hostname.endsWith("." + c.hostname);
   }
-  return c.hostname === o.hostname && c.port === o.port;
+  return cHost === oHost && c.port === o.port;
 }
 
 /** Convert a simple glob (`**`, `*`, `?`) to an anchored RegExp against the path. */
