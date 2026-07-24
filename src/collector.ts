@@ -488,16 +488,19 @@ interface DomFingerprint {
 
 async function readDomFingerprint(page: import("playwright").Page, spinnerSelector: string): Promise<DomFingerprint> {
   return page.evaluate((spinnerSel) => {
-    const isVisible = (el: Element) => {
-      const r = (el as HTMLElement).getBoundingClientRect();
-      const style = getComputedStyle(el as HTMLElement);
-      return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-    };
     return {
       textLength: (document.body?.innerText ?? "").trim().length,
       childElementCount: document.body?.getElementsByTagName("*").length ?? 0,
-      spinnerVisible: Array.from(document.querySelectorAll(spinnerSel)).some(isVisible),
-      visibleHeadingCount: Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6")).filter(isVisible).length,
+      spinnerVisible: Array.from(document.querySelectorAll(spinnerSel)).some((el) => {
+        const r = (el as HTMLElement).getBoundingClientRect();
+        const style = getComputedStyle(el as HTMLElement);
+        return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      }),
+      visibleHeadingCount: Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6")).filter((el) => {
+        const r = (el as HTMLElement).getBoundingClientRect();
+        const style = getComputedStyle(el as HTMLElement);
+        return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      }).length,
       readyState: document.readyState,
     };
   }, spinnerSelector);

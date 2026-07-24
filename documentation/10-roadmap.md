@@ -49,7 +49,7 @@ Phase 2 implements the full AI verdict layer behind a single orchestrator seam, 
 | **Model cost/latency surprises** | per-run model spend is new to CI | Hard `maxModelCostUsd`; cheap-model default; costs printed on every run; hard rules keep working when budget exhausts (`unjudged`, yellow) |
 | **Provider drift / lock-in** | any single-vendor coupling contradicts the agnostic promise | All model access through the AI SDK `LanguageModel` seam; Stagehand is itself model-agnostic; judge prompt uses no provider-specific features beyond structured output |
 | **Discovery misses pages** | outside-in can't see unlinked, unlisted routes | Three merged sources + per-page source in the report (coverage is inspectable) + one-line `routes` fix; explicitly documented limitation (doc 03) |
-| **Occasional blank capture, cause unconfirmed** | 2/17 hard blanks + 6/17 flaky on a live qplus.tv run, both bot-blocking and vigil's own animation settings ruled out by direct testing | Open — leading hypothesis is settle-protocol timing variance (doc 04's residual blind spot), not yet confirmed; see "Occasional blank capture on qplus.tv" below |
+| **DOM-stability wait silently disabled** (fixed) | an esbuild `__name` crash in `readDomFingerprint` made every stability check throw and fail silently, on every site, under `tsx` | Fixed — inlined the anonymous-arrow pattern already used elsewhere in the same file; verified live (10/10 runs before → after) — see "DOM-stability wait was silently disabled" below |
 | **Stagehand API churn** | it's a fast-moving young project | vigil touches it only inside FlowRunner/agent-login (~2 files); Midscene identified as drop-in-class alternative (doc 09) |
 | **Auth complexity (SSO/MFA)** | blocks the "everything behind login" majority | storageState reuse + scripted login cover most; test-account pattern documented; TOTP as fast-follow |
 
@@ -125,66 +125,102 @@ before and after:
 how it judges what it sees. See the next entry for what a full run against the newly-visible 16
 extra pages surfaced.
 
-### Occasional blank capture on qplus.tv — cause still unconfirmed (bot-detection theory ruled out)
+### DOM-stability wait was silently disabled by an esbuild `__name` crash (fixed)
 
-**Status:** Open — root cause not yet identified. An earlier version of this entry claimed
-qplus.tv was fingerprinting and bot-blocking vigil's headless browser; that claim did not survive
-direct testing and has been retracted below rather than left to stand uncorrected.
+**Status:** Confirmed root cause, fixed, and verified live (2026-07-24). This closes both the
+"bot-detection" and "vigil's animation settings" theories from the previous version of this
+entry — neither was the real cause, and both are retracted below in favor of what actually
+happened.
 
-**In plain terms.** Once vigil could see all 17 of qplus.tv's real pages (previous entry), a full
-run reported 2 pages as completely broken — solid black screen, nothing rendered — and 6 more
-that failed once and then passed on retry. Opening those same URLs in an ordinary browser showed
-them rendering fine, so the first theory was "the site is detecting and blocking vigil's
-automated browser." That theory turned out to be wrong: checked properly, three separate tests
-all contradicted it, and none supported it. The honest current answer is *we don't yet know why*
-— it looks like ordinary timing variance rather than deliberate blocking, but that's not proven
-either.
+**In plain terms.** Once vigil could see all 17 of qplus.tv's real pages, a full run reported 2
+pages as completely broken and 6 more as flaky. Two theories were tried and both were directly
+tested and ruled out (the site blocking vigil; vigil's own animation-disabling settings breaking
+the page) — see the retracted evidence below. The actual cause turned out to be much simpler and
+had nothing to do with qplus.tv at all: **one of vigil's own internal safety checks — the one
+whose entire job is "don't take the screenshot until the page has actually finished changing" —
+was silently crashing on every single page, on every site, every time it ran, and nobody could
+tell, because the code that catches its errors was written to fail silently.** With that check
+broken, vigil was taking screenshots whenever the network happened to go quiet, with no
+protection against catching a page mid-render — like a photographer whose "wait for people to
+stop moving" sensor was broken, so every photo was really just "click ASAP." Most pages render
+fast enough that this rarely mattered. qplus.tv's real content takes 4–6 seconds to fully mount,
+which is a wide enough window that the broken safety check's absence became visible.
 
-**What was actually checked (2026-07-24), and what it ruled out:**
-1. **Response headers** — no Cloudflare, Akamai, PerimeterX, DataDome, Incapsula, or any other
-   known bot-management vendor signature. Plain Express server headers only.
-2. **`curl` with a fake, plainly non-browser user agent** — returned the *full* real page content
-   in the raw HTML, for both previously-"broken" URLs. A server actively blocking automated
-   clients should have blocked this at least as hard as a headless browser; it didn't block it at
-   all. This alone is hard to square with deliberate server-side or UA-based blocking.
-3. **A direct, isolated test of the "vigil's own settings break the page" theory** — a minimal
-   script using vigil's exact browser context (headless, `reducedMotion: "reduce"`, the same
-   animation-disabling CSS injection `src/collector.ts` uses) loaded the same URL that failed in
-   the real run. It rendered real content (247–328 characters of visible text) on every attempt.
-   So vigil's specific capture settings, tested in isolation, are not sufficient on their
-   own to reproduce the blank render either.
+**Retracted theories (both directly tested, both wrong):**
+1. ~~The site fingerprints and blocks vigil's headless browser.~~ Ruled out: no bot-management
+   vendor headers (Cloudflare/Akamai/PerimeterX/DataDome/Incapsula all absent), and `curl` with a
+   fake, plainly non-browser user agent got the full real page content back every time — a
+   blocking server should have blocked that at least as hard as a headless browser.
+2. ~~vigil's `reducedMotion` + animation-disabling CSS breaks the site's own reveal logic.~~
+   Ruled out: an isolated script using vigil's exact browser context settings rendered real
+   content on every attempt.
 
-**Both candidate explanations are therefore ruled out by direct evidence**, not just judged
-unlikely:
-- ~~Deliberate anti-bot blocking~~ — contradicted by (1) and (2).
-- ~~vigil's animation/reduced-motion settings breaking the site's own reveal logic~~ —
-  contradicted by (3).
+**What was actually happening — confirmed by direct instrumentation.** `waitForDomStable`
+(`src/collector.ts`) polls a small "render fingerprint" (visible text length, element count,
+spinner visibility, etc.) until it stops changing, and only then lets capture proceed — this is
+the mechanism that's supposed to stop vigil from photographing a page mid-mount. Its
+fingerprint-reading step, `readDomFingerprint`, was throwing an exception on **every single
+call, on every page, every run** — confirmed by temporarily logging the swallowed error:
+```
+page.evaluate: ReferenceError: __name is not defined
+    at eval (eval at evaluate (:303:30), <anonymous>:1:30)
+```
+`readDomFingerprint`'s callback contained `const isVisible = (el: Element) => {...}` — an arrow
+function assigned to a named `const` — *inside* the function passed to `page.evaluate()`. Under
+`tsx`'s esbuild-based transform, a named function assignment like that gets an injected
+`__name(isVisible, "isVisible")` helper call for `.name`-preservation purposes. That helper
+exists in the surrounding Node module — but `page.evaluate()` only ships the callback's own
+source into the browser's isolated page context, not any file-level helper it happens to
+reference. The helper call has nothing to bind to inside the browser, so it throws immediately,
+every time, regardless of which site is being checked.
 
-**What's left, and why it's more mundane than either theory:** in the real run, the two "hard"
-blanks had zero console errors and zero network errors — a completely silent gap between a
-normal page load and zero rendered text at the moment vigil sampled it — and 6 *other* pages in
-the same run were flaky (failed once, clean on retry) with no bot-block or settings explanation
-needed for those at all. The simplest explanation consistent with all of this is ordinary timing
-variance: vigil's settle protocol (network-quiet + DOM-stability wait, doc 04) occasionally
-samples this specific site in a bad split-second window before its content has actually mounted,
-the same general category of race the not-yet-rendered guard (doc 04) already exists to catch —
-just not fully closed for this site's particular pattern. That is a hypothesis, not yet
-confirmed the way the ruled-out theories were confirmed-false; it needs its own direct test
-(e.g., running vigil's actual `collect()` against this URL several times in a row and inspecting
-where in the settle timeline the blank samples land) before being scoped into a fix.
+Because `waitForDomStable`'s catch block does `catch { return "unavailable"; }` — no retry, no
+distinction between "genuinely can't read the page" and "this one read attempt hit a transient
+tooling error" — a single guaranteed-permanent crash on the very first poll silently disabled the
+entire stability wait, forever, for every page vigil has ever checked while built through `tsx`.
+Capture proceeded immediately once the network went quiet, with zero protection against a
+still-mounting page. This is the exact "stable but empty shell" failure mode doc 04's
+not-yet-rendered guard was built to catch — except the guard itself was never actually running.
 
-**Why this matters:** the false-positive risk is exactly as real as it was before — vigil
-reported "completely broken" on two pages that were fine. What changed is *why*: not a hostile
-site, not vigil's deliberate settings, so a fix aimed at either of those would have been solving
-the wrong problem. The right next step is investigating the settle-timing hypothesis with real
-data before writing a scoped plan, the same discipline the judge redesign and the discovery fix
-above both followed — verify before scoping, not scope before verifying.
+This is why the earlier two theories looked plausible: a real capture context (bot-block idea)
+and a settings mismatch (animation idea) are both things that would plausibly cause an
+*occasional* blank. The real cause was neither — it was a permanent, 100%-reproducible internal
+crash, and what looked like "occasional" blank pages was really "every single page has zero
+DOM-stability protection, and only slow-rendering pages get caught by the resulting gap often
+enough to notice." Confirmed by running vigil's real `collect()` five times against each of the
+two failing URLs before the fix: `dom=unavailable` with **zero** fingerprint samples, 10 times out
+of 10, no exceptions.
 
-**Not yet scoped** — deliberately. The previous version of this entry jumped from "plausible
-story" to a three-part implementation plan without testing the story first; that was a process
-mistake, corrected here rather than carried forward into a fix for a cause that turned out not to
-exist. Next step is confirming or refuting the timing-variance hypothesis with vigil's actual
-capture path before committing to any code change.
+**The fix, generalized, not site-specific.** Removed the `const`-bound arrow function from
+`readDomFingerprint`, inlining the two `.getBoundingClientRect()`/visibility checks as anonymous
+arrows passed directly as arguments — the same pattern the file's *other* `page.evaluate()` call
+already safely used (which is exactly why that one never crashed). This is a one-function fix
+that touches nothing site-specific: it repairs the DOM-stability wait itself, so it benefits
+every site vigil checks, not just qplus.tv. The file's own comment on `DISABLE_ANIM_INIT` had
+already flagged this exact esbuild `__name`-injection hazard as a reason to avoid passing
+functions into page-context scripts — that defense just hadn't been applied to this second
+`page.evaluate()` call yet. Checked the rest of the codebase for the same vulnerable pattern
+(a `const`-assigned arrow function inside a `page.evaluate`/`addInitScript` callback):
+`src/discovery/crawler.ts`'s two page-context scripts were already written the safe way
+(inline anonymous arrows / a raw string), so this was the only instance.
+
+**Verified live (2026-07-24), before and after, 5 runs each on both previously-failing URLs:**
+- **Before:** `dom=unavailable`, 0 fingerprint samples, 10/10 runs. Rendered text length bounced
+  unpredictably between 0 and several hundred characters purely by luck of when network-quiet
+  happened to fire mid-mount.
+- **After:** `dom=stable`, real fingerprint samples every run (11–21 samples per page), 10/10
+  runs. Every single run converged on the correct final content — 7,812 characters on `/`,
+  328 on the tournament page — matching what a real browser sees. The fingerprint samples show
+  the DOM's actual mount sequence for the first time: `23 chars → 0 (brief remount) → 180 → …→
+  7812`, exactly the kind of multi-stage client render the stability wait exists to wait out.
+- Full suite: `npx tsc --noEmit` clean, `npx vitest run` 179/179 passing, both before and after
+  (the existing test suite's own DOM-stability-wait test didn't catch this — likely because
+  `vitest`'s esbuild transform config doesn't inject the same `__name` helper `tsx`'s does. Worth
+  noting as a testing-tooling gap, not chased further here since the fix itself doesn't depend on
+  which toolchain is used to verify it — the source pattern is unconditionally correct now.)
+
+**Scope note:** a one-function Collector fix (`src/collector.ts`), independent of the discovery
+fix and the judge redesign above. No hard-rule, judge-prompt, or `verdictPolicy.ts` changes.
 
 ### Judge evidence interpretation contract
 
