@@ -49,7 +49,7 @@ Phase 2 implements the full AI verdict layer behind a single orchestrator seam, 
 | **Model cost/latency surprises** | per-run model spend is new to CI | Hard `maxModelCostUsd`; cheap-model default; costs printed on every run; hard rules keep working when budget exhausts (`unjudged`, yellow) |
 | **Provider drift / lock-in** | any single-vendor coupling contradicts the agnostic promise | All model access through the AI SDK `LanguageModel` seam; Stagehand is itself model-agnostic; judge prompt uses no provider-specific features beyond structured output |
 | **Discovery misses pages** | outside-in can't see unlinked, unlisted routes | Three merged sources + per-page source in the report (coverage is inspectable) + one-line `routes` fix; explicitly documented limitation (doc 03) |
-| **Headless capture gets bot-blocked** | some sites serve blank/degraded content to headless Chromium specifically | Not yet mitigated — see "Headless capture blocked by anti-bot protection" below; currently a real false-positive source |
+| **Headless capture gets bot-blocked** | some sites serve blank/degraded content to headless Chromium specifically | Scoped (not yet implemented) — realistic browser identity + a visible `possibleBotBlock` signal, no verdict-logic change; see "Headless capture blocked by anti-bot protection" below |
 | **Stagehand API churn** | it's a fast-moving young project | vigil touches it only inside FlowRunner/agent-login (~2 files); Midscene identified as drop-in-class alternative (doc 09) |
 | **Auth complexity (SSO/MFA)** | blocks the "everything behind login" majority | storageState reuse + scripted login cover most; test-account pattern documented; TOTP as fast-follow |
 
@@ -125,9 +125,9 @@ before and after:
 how it judges what it sees. See the next entry for what a full run against the newly-visible 16
 extra pages surfaced.
 
-### Headless capture blocked by anti-bot protection (new, open)
+### Headless capture blocked by anti-bot protection
 
-**Status:** Open — discovered while validating the fix above; not yet mitigated.
+**Status:** Scoped — ready to implement (2026-07-24).
 
 **In plain terms.** Once vigil could actually see all 17 of qplus.tv's real pages, it ran a full
 check and reported 2 pages as completely broken — solid black screen, nothing rendered. That
@@ -166,12 +166,67 @@ site's actual health. This is a capture-stage problem — separate from both the
 above and the judge redesign — and it sits upstream of everything else: no amount of better
 judgment or better discovery fixes a screenshot that was never real to begin with.
 
-**Not yet decided (needs investigation before picking a fix):** whether to set a realistic user
-agent / disable common headless tells, whether to detect a suspiciously blank capture and retry
-with a different fingerprint before hard-failing, or whether this is simply out of scope and
-sites doing this should be documented as a known vigil limitation. Deliberately left open rather
-than guessed at — this needs its own scoped investigation the way the judge redesign got one,
-not a quick patch.
+**Confirmed mechanism.** `Vigil.launch()` (`src/orchestrator.ts`) calls
+`ENGINES[browser].launch()` with zero options — plain default headless Chromium, no custom user
+agent, no fingerprint hardening of any kind. The retry that already runs on every hard fail
+(`src/orchestrator.ts`, the `flaky` recovery path) calls `collect()` again on the *same* launched
+browser with the *same* default context — so for qplus.tv's two hard fails, the existing retry
+already fired and failed again with an identical fingerprint. That's consistent with a
+per-page, per-fingerprint block rather than a one-off network blip: retrying with the same
+disguise doesn't help if the disguise is the problem.
+
+**Root cause hypothesis, sharpened.** Plain default Playwright Chromium is the single most
+commonly fingerprinted automation signature on the web — sites that bot-check at all usually
+check for exactly this. vigil isn't scraping someone else's site without permission here; it's
+the site owner checking their own deploy. Looking like an ordinary visiting browser rather than
+an identifiable automation tool is a legitimate fix, not an evasion arms race — which is exactly
+why the plan below stops at "look normal" and deliberately does not go further.
+
+**Non-goals** (keeping this a bounded Collector-quality fix, not a stealth project):
+- No comprehensive fingerprint-evasion suite (canvas noise, WebGL spoofing, timing-jitter
+  patches, `playwright-extra`-style plugin stacks). That's a permanent cat-and-mouse maintenance
+  burden against sites that actively invest in detecting it — disproportionate to the problem
+  unless the minimal fix below proves insufficient with real evidence.
+- No silent auto-pass or auto-suppression of blank captures. A page that's actually blank is
+  still exactly the failure vigil exists to catch (doc 04's not-yet-rendered guard already proves
+  a blank capture can be legitimate signal) — this plan only adds *visible* context to a blank
+  verdict, never hides one.
+- No new retry loop. The existing single free retry (`src/orchestrator.ts`) is reused as-is;
+  this plan only changes what fingerprint that retry (and the first attempt) presents.
+- No change to `verdictPolicy.ts` or the H4 hard-rule threshold itself.
+
+**The plan, in three parts.**
+
+1. **A realistic browser identity on every capture, not just the retry.** Set a real desktop
+   Chrome user agent and patch the single most common automated-browser tell
+   (`navigator.webdriver`) via `context.addInitScript(...)` in `collect()`
+   (`src/collector.ts`) — the same mechanism already used there for `DISABLE_ANIM_INIT`. Applied
+   to the first visit as well as the retry, since there's no legitimate reason for vigil's
+   capture to advertise itself as automation in the first place.
+
+2. **A `possibleBotBlock` signal in the digest, not a verdict change.** Add a boolean to the
+   render signals (`src/types.ts` `Signals.render`) computed from evidence already collected:
+   near-zero rendered text *and* a blank/near-blank screenshot *and* zero console errors *and*
+   zero network errors *and* zero error markers — i.e., blank with **no** evidence of an actual
+   app failure, which is the qplus.tv pattern exactly (contrast with a real broken page, which
+   almost always leaves *some* trace: a 500, a console error, a stuck spinner). This is
+   observation, same tier as `spinnerStuck` — H4 keeps deciding pass/fail exactly as it does
+   today; this field only rides along as context for whoever reads the report.
+3. **Surfaced in the report.** `possibleBotBlock: true` shown next to an H4 blank-render fail in
+   the HTML report (`src/reporter/html.ts`), so a human sees "blank, and here's why this might be
+   a bot block rather than a real outage" instead of an unqualified red.
+
+**Acceptance criterion (to run once implemented):** re-run `vigil run --url https://qplus.tv`
+with the hardened context. Two possible honest outcomes, both a real improvement over today:
+- The two previously-blank pages now render real content — proving the plain-headless
+  fingerprint was in fact the cause, closing this issue outright.
+- They're still blank, but the report now shows `possibleBotBlock: true` on both — turning a
+  silent, confident false BROKEN into a flagged, explainable one, which is the honest fallback if
+  part 1 alone isn't enough to get past qplus.tv's specific check.
+
+**Scope note:** a Collector-stage fix (observation quality), same category as the DOM-stability
+work in doc 04 — deliberately not a hard-rule or judge change, so this stays independently
+attributable from both the discovery fix above and the judge redesign.
 
 ### Judge evidence interpretation contract
 
